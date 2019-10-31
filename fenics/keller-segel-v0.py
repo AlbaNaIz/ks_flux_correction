@@ -62,11 +62,11 @@ if( __name__ == "__main__" ):
         #
         # Print info
         #
-        max_u, min_u = max(u.vector()), min(u.vector())
-        max_v, min_v = max(v.vector()), min(u.vector())
-        end_of_line = '\n' if(min_u>0) else " <<< positivity broken!!\n"
-        print(f"  máx(u)={max_u:.5e}, min(u)={min_u:.5e}", end=end_of_line)
-        print(f"  máx(v)={max_v:.5e}, min(v)={min_v:.5e}")
+        u_max, u_min = max(u.vector()), min(u.vector())
+        v_max, v_min = max(v.vector()), min(u.vector())
+        end_of_line = '\n' if(u_min>0) else " <<< positivity broken!!\n"
+        print(f"  máx(u)={u_max:.5e}, min(u)={u_min:.5e}", end=end_of_line)
+        print(f"  máx(v)={v_max:.5e}, min(v)={v_min:.5e}")
         integral_u = assemble(u*dx); print(f"  int(u)={integral_u:.5e}" )
         #
         # Plot
