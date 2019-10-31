@@ -92,6 +92,7 @@ class KellerSegelTest(object):
             #
             self.u0.assign(u)
             self.v0.assign(v)
+        return {'iter': iter; 't': t; 'u': u; 'v': v}
 
 if( __name__ == "__main__" ):
     #
@@ -120,4 +121,5 @@ if( __name__ == "__main__" ):
     #
     # Run time iterations
     #
-    ks_test.run(nt_steps=100, break_when_negative_u=True)
+    result = ks_test.run(nt_steps=100, break_when_negative_u=True)
+    assert( result['iter']==10 );
