@@ -9,6 +9,7 @@ class KellerSegelTest(object):
         self.fe_order = fe_order
         self.dt = dt
         self.t_init = t_init
+        self.t = t_init
         self.k0 = k0
         self.k1 = k1
         self.k2 = k2
@@ -55,11 +56,10 @@ class KellerSegelTest(object):
         #
         # Run time iterations
         #
-        t = self.t_init
         u, v = Function(self.Uh), Function(self.Vh)
         for iter in range(nt_steps):
-            t = t + self.dt
-            print(f"Time iteration {iter}, t={t:.2e}")
+            self.t = self.t + self.dt
+            print(f"Time iteration {iter}, t={self.t:.2e}")
             #
             # Compute v
             #
@@ -71,6 +71,11 @@ class KellerSegelTest(object):
             #
             solve ( self.a_u == self.f_u, u )
             #
+            # Save solution (to be used in next iteration)
+            #
+            self.u0.assign(u)
+            self.v0.assign(v)
+            #
             # Print info
             #
             u_max, u_min = max(u.vector()), min(u.vector())
@@ -79,20 +84,17 @@ class KellerSegelTest(object):
             print(f"  máx(u)={u_max:.5e}, min(u)={u_min:.5e}", end=end_of_line)
             print(f"  máx(v)={v_max:.5e}, min(v)={v_min:.5e}")
             integral_u = assemble(u*dx); print(f"  int(u)={integral_u:.5e}" )
+
             if(u_min<=0 and break_when_negative_u):
                 break
             #
             # Plot
             #
+            t = self.t
             if (iter % 10 == 0): # Only draw some fotograms
                 plot(u, title=f"u, t={t:.2e}", mode="warp")
                 plt.show()
-            #
-            # Save solution (to be used in next iteration)
-            #
-            self.u0.assign(u)
-            self.v0.assign(v)
-        return {'iter': iter; 't': t; 'u': u; 'v': v}
+        return {'iter': iter, 't': t, 'u': u, 'v': v}
 
 if( __name__ == "__main__" ):
     #
@@ -101,13 +103,11 @@ if( __name__ == "__main__" ):
     nx = 60
     mesh = RectangleMesh(p0=Point(-0.5, -0.5), p1=Point(0.5, 0.5), nx=nx, ny=nx)
     plot(mesh)
-
     #
     # Build K-S test object
     #
     fe_order = 1
     ks_test = KellerSegelTest( mesh, fe_order, dt=1.e-6 )
-
     #
     # Define C-K initial conditions
     #
@@ -117,9 +117,12 @@ if( __name__ == "__main__" ):
                         degree=fe_order)
     ks_test.set_u( u_init )
     ks_test.set_v( v_init )
-
     #
     # Run time iterations
     #
-    result = ks_test.run(nt_steps=100, break_when_negative_u=True)
-    assert( result['iter']==10 );
+    result = ks_test.run( nt_steps=100, break_when_negative_u=True )
+    #
+    # Make sure that, for this test, positivity is broken at iteration 10
+    # At least, that is what happended in our previous tests!
+    #
+    assert result['iter']==10
