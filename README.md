@@ -1,1 +1,1 @@
-# ks_flux_correction
+# Keller-Segel flux correction schemes
