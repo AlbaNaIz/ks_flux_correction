@@ -1,0 +1,486 @@
+verbosity=0;
+load "iovtk";
+cout.precision(10);
+include "getARGV.idp";
+
+// //,---------------------------------------------------------------------
+// // Circle mesh
+// //`---------------------------------------------------------------------
+// real R=1.5;
+// border Gamma(t=0, 2*pi) { x=R*cos(t);  y=R*sin(t); };
+// int nx = 16;
+// mesh Th = buildmesh(Gamma(nx));
+int nx = getARGV("nx", 5);
+mesh Th = square(nx, nx, [x-0.5, y-0.5]);
+
+// Unknown and test functions
+fespace Uh(Th, P1);
+Uh u, ub, u0;
+fespace Vh(Th, P1);
+Vh v, vb, v0;
+
+//,---------------------------------------------------------------------
+//| Time parameters
+//`---------------------------------------------------------------------
+real t = 0;
+int niter = getARGV("niter", 1);
+real dt = 1.e-6;
+
+//,---------------------------------------------------------------------
+//| Keller-Segel data
+//`---------------------------------------------------------------------
+// real k0=1, k1=0.2, k2=1, k3=0.1, k4=1;
+real k0=1, k1=1, k2=1, k3=1, k4=1;
+
+// real alpha=30, X0=0.3, Y0=0.3;
+real C0=5.e5, C1=10, X0=0.0, Y0=0.0;
+real infU = 0;
+func initialUGaussian = infU + C0*exp( -C1*( (x-X0)^2 + (y-Y0)^2 ) );
+// u0 = initialUGaussian;
+// v0 = 0.5*u0;
+
+// // Epshteyn-Kurganov initial conditions:
+// func uInitCond = 1200*exp(-120*(x^2+y^2));
+// func vInitCond = 600*exp(-60*(x^2+y^2));
+// u0 = uInitCond;
+// v0 = vInitCond;
+// Chertok-Kurganov initial conditions:
+func uInitCond = 1000*exp(-100*(x^2+y^2));
+func vInitCond = 500*exp(-50*(x^2+y^2));
+u0 = uInitCond;
+v0 = vInitCond;
+
+bool printResults = true; if(printResults) {
+  real uMax = u0[].max; real uMin=u0[].min;
+  real vMax = v0[].max; real vMin=v0[].min;
+  cout << "Dato inicial:" << endl;
+  cout << "  max(u0) = " << uMax << "  min(u0) = " << uMin
+       << (uMin<0 ? " ...---... (u) Positivity broken!!!" : "") << endl;
+  cout << "  max(v0) = " << vMax << "  min(v0) = " << vMin
+       << (vMin<0 ? " ...---... (v) Positivity broken!!!" : "") << endl;
+  real uInt = int2d(Th)(u0); real vInt = int2d(Th)(v0);
+  cout << "  int_Th(u0) = " << uInt << "  int_Th(v0) = " << vInt << endl;
+ }
+
+real integralU0=int2d(Th)(u0);
+cout <<"La integral del dato inicial es "<< integralU0 << " (4*pi=" << 4*pi << ")" << endl;
+
+string testName = "KS_" +
+  "dt:" + dt + "_nx:" + nx +
+  "_k0:" + k0 + "_k1:" + k1 + "_k2:" + k2 + "_k3:" + k3 + "_k4:" + k4;
+cout << "Running test " << testName << endl;
+
+
+// Macros..............................................................>
+macro grad(u) [ dx(u), dy(u) ] // End of Macro
+  ; // for emacs :)
+macro div(u,v) ( dx(u) + dy(v) ) // End of Macro
+  ; // for emacs :)
+
+// ---------------------------------------------------------------------
+// Upwinding of the Transport matrix, K.
+//
+// Macro stores the result in the matrix Kupw.
+//
+// See "High-Order Local Maximum Principle Preserving (MPP)
+// Discontinuous Galerkin Finite Element Method for the Transport
+// Equation". R. Anderson, V. Dobrev, Tz. Kolev, D. Kuzmin, M. Quezada
+// de Luna, R. Rieben and V. Tomov
+// ---------------------------------------------------------------------
+NewMacro upwindTransport(K, Kupw)
+{
+  int[int] I(1),J(1); real[int] C(1);
+  [I,J,C]=K; // get the sparse terms of the matrix K (the arrays are resized)
+  int n=K.n;
+  int k=0;
+  for(int i=0; i<n; i++) {
+    Kupw(i,i) = K(i,i);
+    // cout << "K_ii=" << Kupw(i,i) << endl;
+    while(I[k]==i) {
+      // cout << "k=" << k << endl;
+      int j = J[k];
+      if(i!=j) {
+	real tmp = max(0.0, max(-K(i,j), -K(j,i)));  // max(0,-K(i,j), -K(j,i))1
+	Kupw(i,j) = K(i,j) + tmp;
+	Kupw(i,i) = Kupw(i,i) - tmp;
+      }
+      k++;
+      if(k==I.n) break;
+    }
+  }
+} EndMacro;
+;
+
+// ---------------------------------------------------------------------
+// Compute artificial diffusion matrix and store it into D
+//
+// This macro assumes that adequate vectors I, J, C have been computed, eg:
+// int[int] I(1),J(1); real[int] C(1);
+// [I,J,C]=K; // get the sparse terms of the matrix K (the arrays are resized)
+//
+// See "High-Order Local Maximum Principle Preserving (MPP)
+// Discontinuous Galerkin Finite Element Method for the Transport
+// Equation". R. Anderson, V. Dobrev, Tz. Kolev, D. Kuzmin, M. Quezada
+// de Luna, R. Rieben and V. Tomov
+// ---------------------------------------------------------------------
+NewMacro computeArtificialDiffusion(K, D)
+{
+  int[int] I(1),J(1); real[int] C(1);
+  [I,J,C] = K;
+  C = 0;
+  D=[I,J,C];
+  int n=K.n;
+  int k=0;
+  for(int i=0; i<n; i++) {
+    real rowSum=0;
+    while(I[k]==i) {
+      int j = J[k];
+      if(i!=j) {
+	real Dij = max(0.0, max(-K(i,j), -K(j,i)));  // max(0,-K(i,j), -K(j,i))
+	D(i,j) = Dij;
+	rowSum = rowSum + Dij;
+	// cout << "D(" << i << "," << j << ") = " << Dij << endl;
+      }
+      k++;
+      if(k==I.n) break;
+    }
+    D(i,i) = -rowSum;
+    // cout << "D(" << i << "," << i << ") = " << D(i,i) << endl;
+    // cout << "i=" << i << ", rowSum=" << rowSum << endl;
+  }
+} EndMacro;
+;
+
+// (Coninuous FEM) Keller Segel problem ·······································
+problem KellerSegelU(u,ub)=
+  int2d(Th)( u*ub/dt + k0*grad(u)'*grad(ub) )
+  + int2d(Th)( - u0*ub/dt - k1*u0*grad(v)'*grad(ub) );
+problem KellerSegelV(v,vb)=
+  int2d(Th)( v*vb/dt + k2*grad(v)'*grad(vb) + k3*v*vb )
+  + int2d(Th)( - v0*vb/dt - k4*u0*vb );
+
+// Bilinear form for mass matrix
+varf varfMass(u,ub) = int2d(Th) ( u*ub );
+
+// Bilinear form for lumped mass matrix
+varf varfMassLump(u,ub) = int2d(Th, qft=qf1pTlump) ( u*ub );
+
+// Bilinear form for diffusion stiffness matrix
+varf varfDiffusion(u,ub) = int2d(Th) ( grad(u)'*grad(ub) );
+
+// Bilinear form for convection matrix
+varf varfChemotaxisConvect(u, ub) = int2d(Th)( u*grad(v)'*grad(ub) );
+// varf varfChemotaxisConvect(u, ub) = int2d(Th)( u*dx(v)*dx(ub) + u*dy(v)*dy(ub) );
+
+//,---------------------------------------------------------------------
+//| Time loop
+//`---------------------------------------------------------------------
+
+// 1) Time-independent computation
+matrix M = varfMass(Uh,Uh);   // Mass matrix
+matrix ML = varfMassLump(Uh,Uh);   // Mass lumped matrix
+matrix L = varfDiffusion(Uh,Uh); // Diffusion matrix
+
+// matrix A0u = ML + dt*k0*L;
+matrix A0u = ML;
+matrix Av = (1+dt*k3)*ML + dt*k2*L;
+
+string matrixDir="./";
+bool saveMatrices=true; if(saveMatrices) {
+  {ofstream f( matrixDir + "M.matrix.coo"); f << M; }
+  {ofstream f( matrixDir + "ML.matrix.coo"); f << ML; }
+  {ofstream f( matrixDir + "L.matrix.coo"); f << L; }
+ }
+
+// 1) Time-dependent computation
+for (int k=1; k<=niter; k++) {
+  t=t+dt;
+  cout << "iter = " << k << "\t (t = " << t << ")" << endl;
+
+  // Solve system for u and v ·················································
+  // KellerSegelV; // Compute v from u0
+  // KellerSegelU; // Compute v from u0
+
+  // ==========================================================================
+  // 1) Compute low order solutions
+  // ==========================================================================
+
+  // Solve system for v ·······················································
+
+  real[int] F1v = ML*v0[];
+  real[int] F2v = ML*u0[];
+  real[int] Fv  = F1v + dt*k4*F2v;
+
+  // Compute low order solution
+  set(Av, solver=UMFPACK);
+  v[] = Av^-1*Fv;
+
+  // Solve system for u ·······················································
+
+  // Compute convection
+  matrix K = varfChemotaxisConvect(Uh, Uh); // - Convection matrix (at RHS)
+  K = k1*K + (-k0)*L; // Complete operator (at RHS)
+  // matrix KL=K;
+  matrix KL = K; // Matrix where will be computed the low order matrix (at RHS)
+  // Add artficial diffusion to KL
+  matrix D;
+  computeArtificialDiffusion(KL, D); // D <- artificial diffusion
+  KL = KL + D;
+
+  // Compute low order solution
+  matrix Au = A0u + (-dt)*KL;
+  real[int] Fu = ML*u0[];
+  set(Au, solver=UMFPACK);
+  u[] = Au^-1*Fu;
+
+  if(saveMatrices) {
+    {ofstream f( matrixDir + "K.matrix.coo"); f << K; }
+    {ofstream f( matrixDir + "D.matrix.coo"); f << D; }
+    {ofstream f( matrixDir + "KL.matrix.coo"); f << KL; }
+  }
+  if(printResults) {
+    real uMax = u[].max; real uMin=u[].min;
+    real vMax = v[].max; real vMin=v[].min;
+    cout << "  max(u) = " << uMax << "  min(u) = " << uMin
+	 << (uMin<0 ? " ...---... (u) Positivity broken!!!" : "") << endl;
+    if(uMax>1.e+10) {
+      cout << "BLOW UP FOUND!!" << endl;
+      break;
+    }
+    cout << "  max(v) = " << vMax << "  min(v) = " << vMin
+	 << (vMin<0 ? " ...---... (v) Positivity broken!!!" : "") << endl;
+    real uInt = int2d(Th)(u); real vInt = int2d(Th)(v);
+    cout << "  int_Th(u) = " << uInt << "  int_Th(v) = " << vInt << endl;
+  }
+
+  // ==========================================================================
+  // 2) Update to high order solutions
+  // ==========================================================================
+
+  // 0. Compute residuals, f_ij = (m_ij + d_ij)*(u_j-u_i)
+  matrix FF = M + (-1)*ML + (-dt)*D;
+  int[int] IF(1), JF(1); real[int] CF(1);
+  [IF,JF,CF] = FF; // get the sparse terms of the matrix (the arrays are resized)
+  int n=FF.n;
+
+  // Let UU(i,j) = u[](j)-u[](i), for each i!=j (where f_ij!=0):
+  matrix UU = FF;
+  int[int] IU(1), JU(1); real[int] CU(1);
+  [IU,JU,CU] = UU; // get the sparse terms of the matrix (the arrays are resized)
+  {
+    int k=0;
+    for(int i=0; i<n; i++) {
+      while(IU[k]==i) {
+	int j = JU[k];
+	// CU[k] = u[](j)-u[](i);  // Uij = u_j - u_i
+	UU(i,j) = u[](j)-u[](i);  // Uij = u_j - u_i
+	k++; if(k==IU.n) break;
+      }
+    }
+  }
+  // Let FF_{ij} = FF_{ij}*(u_j - u_i)
+  // CF = CF.*CU;
+  // FF = [IF, JF, CF];
+
+  // Let  FF_ij=0 if FF_ij*(u_j-u_i) > 0
+  // {
+  //   int k=0;
+  //   for(int i=0; i<n; i++) {
+  //     while(IF[k]==i) {
+  // 	int j = JF[k];
+  // 	FF(i,j) *= UU(i,j);
+  // 	k++; if(k==IF.n) break;
+  //     }
+  //   }
+  // }
+  if(saveMatrices) {
+    { ofstream f( matrixDir + "FF_previous.matrix.coo"); f << FF; }
+  }
+
+  // Let  FF_ij=0 if FF_ij*(u_j-u_i) > 0
+  {
+    int k=0;
+    for(int i=0; i<n; i++) {
+      while(IF[k]==i) {
+	int j = JF[k];
+	real Uij = u[](j)-u[](i);  // Uij = u_j - u_i
+	if(FF(i,j)*Uij > 0) { FF(i,j) = 0; }
+	k++; if(k==IF.n) break;
+      }
+    }
+  }
+
+  if(saveMatrices) {
+    {ofstream f( matrixDir + "UU.matrix.coo"); f << UU; }
+    {ofstream f( matrixDir + "FF.matrix.coo"); f << FF; }
+  }
+
+  // 1. Compute the +,- sums of antidifusive fluxes to node i
+  real[int] Pplus(n), Pminus(n);
+  {
+    int k=0;
+    for(int i=0; i<n; i++) {
+      real sumPlus=0, sumMinus=0;
+      while(IF[k]==i) {
+	int j = JF[k];
+	if(i!=j) {
+	  sumPlus  += (FF(i,j) > 0 ? FF(i,j) : 0);
+	  sumMinus += (FF(i,j) < 0 ? FF(i,j) : 0);
+	}
+	k++; if(k==IF.n) break;
+      }
+      Pplus[i] = sumPlus;
+      Pminus[i] = sumMinus;
+    }
+  }
+  if(verbosity>10) {
+    cout << "Pplus =" << Pplus << endl;
+    cout << "Pminus=" << Pminus << endl;
+  }
+
+  // 2. Compute distance to a local extrema of u
+  real[int] Qplus(n), Qminus(n);
+  {
+    int k=0;
+    for(int i=0; i<n; i++) {
+      real qMax=0, qMin=0;
+      while(IU[k]==i) {
+	int j = JU[k];
+	if(i!=j) {
+	  real diff = UU(i,j); // u_j - u_i
+	  if ( diff > qMax ) { qMax = diff; }
+	  if ( diff < qMin ) { qMin = diff; }
+	}
+	k++;
+	if(k==IU.n) break;
+      }
+      Qplus[i] = qMax;
+      Qminus[i] = qMin;
+    }
+  }
+  if(verbosity>10) {
+    cout << "Qplus =" << Qplus << endl;
+    cout << "Qminus=" << Qminus << endl;
+  }
+
+  // 3. Compute the nodal correction factors for node i
+  real[int] Rplus(n), Rminus(n);
+  {
+    real toleranceZero=1.e-17;
+    for(int i=0; i<n; i++) {
+      // Compute Rplus
+      if(abs(Pplus[i])<toleranceZero) {
+	Rplus[i] = 0;
+      }
+      else {
+	real MiOverDt = ML(i,i)/dt;
+	real factor = MiOverDt * Qplus[i]/Pplus[i];
+	Rplus[i] = min(1., factor);
+      }
+      // Compute Rminus
+      if(abs(Pminus[i])<toleranceZero) {
+	Rminus[i] = 0;
+      }
+      else {
+	real MiOverDt = ML(i,i)/dt;
+	real factor = MiOverDt * Qminus[i]/Pminus[i];
+	Rminus[i] = min(1., factor);
+      }
+    }
+  }
+  if(verbosity>10) {
+    cout << "Rplus =" << Rplus << endl;
+    cout << "Rminus=" << Rminus << endl;
+  }
+
+  // 4. Define the correction factor
+  real[int,int] tmpv(n,n);
+  tmpv=1;
+  matrix alpha=tmpv;
+  {
+    int k=0;
+    for(int i=0; i<n; i++) {
+      for(int j=0; j<n; j++) {
+	alpha(i,j) = min(Rminus[i], Rplus[j]);
+	i+j;
+      }
+      while(IF[k]==i) {
+	int j = JF[k];
+	if(FF(i,j)>0) {
+	  alpha(i,j) = min(Rplus[i], Rminus[j]);
+	}
+	k++; if(k==IF.n) break;
+      }
+    }
+  }
+  if(saveMatrices) {
+    {ofstream f( matrixDir + "alpha.matrix.coo"); f << alpha; }
+  }
+
+  // Compute new mass matrix, M^*
+  matrix Mstar = M;
+  {
+    int[int] I(1), J(1); real[int] C(1);
+    [I, J, C] = M;
+    int k=0;
+    for(int i=0; i<n; i++) {
+      real sum = 0.;
+      while(I[k]==i) {
+	int j = J[k];
+	if(i!=j) {
+	  Mstar(i,j) = alpha(i,j)*M(i,j);
+	  sum += Mstar(i,j);
+	}
+	k++; if(k==IF.n) break;
+      }
+      Mstar(i,i) = ML(i,i) - sum;
+    }
+  }
+  // Compute new convection matrix, K^*
+  matrix Kstar = K;
+  {
+    int[int] I(1), J(1); real[int] C(1);
+    [I, J, C] = K;
+    int k=0;
+    for(int i=0; i<n; i++) {
+      real sum = 0.;
+      while(I[k]==i) {
+	int j = J[k];
+	if(i!=j) {
+	  real correctionTerm = (1-alpha(i,j))*D(i,j);
+	  Kstar(i,j) = K(i,j) + correctionTerm;
+	  sum += correctionTerm;
+	}
+	k++; if(k==IF.n) break;
+      }
+      Kstar(i,i) = K(i,i) - sum;
+    }
+  }
+  if(saveMatrices) {
+    {ofstream f( matrixDir + "Mstar.matrix.coo"); f << Mstar; }
+    {ofstream f( matrixDir + "Kstar.matrix.coo"); f << Kstar; }
+  }
+
+  // Finally: high order solution!
+  Au = Mstar + (-dt)*Kstar;
+  Fu = Mstar*u0[];
+  set(Au, solver=UMFPACK);
+  u[] = Au^-1*Fu;
+
+  // ··········································································
+
+  u0 = u;  // Prepare next iteration
+  v0 = v;
+
+  bool plotResults = true; if(plotResults) {
+    plot(u, value=1, fill=1, dim=3);
+    // plot(v, value=1, fill=1, dim=3);
+  }
+
+  bool plotToVTK=false; if(plotToVTK) {
+    string vtkFile="/tmp/" + testName + ".vtk";
+    int[int] vtkOrder=[0];
+    savevtk(vtkFile, Th, u, v, dataname="u v", order=vtkOrder);
+  }
+
+ }
