@@ -1,4 +1,5 @@
 from keller_segel import KS_DefaultScheme as KellerSegelScheme
+from numpy.testing import assert_approx_equal
 
 if( __name__ == "__main__" ):
     #
@@ -10,7 +11,6 @@ if( __name__ == "__main__" ):
     # Define test as a concrete Keller-Segel scheme
     #
     ks_test = KellerSegelScheme( dat.mesh, dat.fe_order, dat.dt )
-
     #
     # Define C-K initial conditions
     #
@@ -20,8 +20,14 @@ if( __name__ == "__main__" ):
     # Run time iterations
     #
     result = ks_test.run( nt_steps=100, break_when_negative_u=True )
+
     #
-    # Make sure that, for this test, positivity is broken at iteration 10
-    # At least, that is what happended in our previous tests!
+    # Make sure that results match what happended in our previous tests!
     #
+
+    # 1) Positivity is broken at iteration 10
     assert result['iter']==10
+
+    # 2) max(u) is over 3.3*10^3
+    max_u = max(result['u'].vector())
+    assert_approx_equal(max_u, 3.328079e+03)
