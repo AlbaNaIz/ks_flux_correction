@@ -11,8 +11,8 @@ class KS_AbstractScheme(ABC):
     Abstract class for Keller-Segel tests.
     """
 
-    def __init__( self, mesh, fe_order, dt, t_init=0.,
-                  k0=1, k1=1, k2=1, k3=1, k4=1 ):
+    def __init__( self, mesh, fe_order, dt, t_init,
+                  k0, k1, k2, k3, k4 ):
         self.mesh = mesh
         self.fe_order = fe_order
         self.dt = dt
@@ -96,20 +96,22 @@ class KS_AbstractScheme(ABC):
             print(f"  máx(v)={v_max:.5e}, min(v)={v_min:.5e}")
             integral_u = assemble(self.u*dx); print(f"  int(u)={integral_u:.5e}" )
 
-            if(u_min<=0 and break_when_negative_u):
-                break
             #
             # Plot
             #
             if (iter % 10 == 0): # Only draw some fotograms
                 plot(self.u, title=f"u, t={self.t:.2e}", mode="warp")
                 plt.show()
+
+            if(u_min<=0 and break_when_negative_u):
+                break
+
         return {'iter': iter, 't': self.t, 'u': self.u, 'v': self.v}
 
 
 class KS_DefaultScheme(KS_AbstractScheme):
     """
-    Deault Keller-Segel space/time scheme.
+    Deafult Keller-Segel space/time scheme.
 
     Specifically, we define the scheme (1,1,1,0), using the notation
     of [Alba N.I., TFG]
@@ -129,7 +131,7 @@ class KS_DefaultScheme(KS_AbstractScheme):
         #
         # Define variational formulation for u and v
         #
-3.32808e+03        dt, k0, k1, k2, k3, k4 \
+        dt, k0, k1, k2, k3, k4 \
             = self.dt, self.k0, self.k1, self.k2, self.k3, self.k4
 
         self.a_u = u*ub * dx + dt*k0*dot(grad(u), grad(ub)) * dx \
