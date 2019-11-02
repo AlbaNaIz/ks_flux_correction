@@ -1,4 +1,4 @@
-from keller_segel import KS_DefaultTest as KellerSegelTest
+from keller_segel import KS_DefaultScheme as KellerSegelScheme
 
 if( __name__ == "__main__" ):
     #
@@ -6,8 +6,11 @@ if( __name__ == "__main__" ):
     #
     import data.chertok_kurganov as dat
     dat.reset(_nx = 60)
+    #
+    # Define test as a concrete Keller-Segel scheme
+    #
+    ks_test = KellerSegelScheme( dat.mesh, dat.fe_order, dat.dt )
 
-    ks_test = KellerSegelTest( dat.mesh, dat.fe_order, dat.dt )
     #
     # Define C-K initial conditions
     #

@@ -6,7 +6,7 @@ set_log_level(30) # Only warnings (default: 20, information of general interet)
 # Module used for defining abstract classes
 from abc import ABC, abstractmethod
 
-class KS_AbstractTest(ABC):
+class KS_AbstractScheme(ABC):
     """
     Abstract class for Keller-Segel tests.
     """
@@ -52,6 +52,12 @@ class KS_AbstractTest(ABC):
         self.a_v = v*vb * dx + dt*k2*dot(grad(v), grad(vb)) * dx \
               + dt*k3*v*vb * dx
         self.f_v = (self.v0*vb + dt*k4*self.u0*vb) * dx
+
+    # @abstractmethod
+    # def build_fe_scheme(self):
+    #     """
+    #     Define variational equations and FE systems which define current scheme
+    #     """
 
     @abstractmethod
     def solve(self):
@@ -102,14 +108,13 @@ class KS_AbstractTest(ABC):
                 plt.show()
         return {'iter': iter, 't': self.t, 'u': self.u, 'v': self.v}
 
-
-class KS_DefaultTest(KS_AbstractTest):
+class KS_DefaultScheme(KS_AbstractScheme):
     """
     Simple Keller-Segel test
     """
     def __init__( self, mesh, fe_order, dt, t_init=0.,
                   k0=1, k1=1, k2=1, k3=1, k4=1 ):
-            super().__init__(mesh, fe_order, dt, t_init, k0, k1, k2, k3, k4)
+        super().__init__(mesh, fe_order, dt, t_init, k0, k1, k2, k3, k4)
 
     def solve(self):
         #
@@ -118,7 +123,6 @@ class KS_DefaultTest(KS_AbstractTest):
         solve ( self.a_v == self.f_v, self.v )
         #
         # Compute gradient of v
-        #
         self.grad_v.assign( project( grad(self.v), self.Wh ) )
         #
         # Compute u
