@@ -49,15 +49,15 @@ class KS_AbstractScheme(ABC):
     @abstractmethod
     def build_fe_scheme(self):
         """
-        Define variational formulation and FE system(s) which define current scheme
-        (each derived concrete class must implement this method)"""
+        Define variational formulation and FE system(s) which define current
+        scheme (each derived class must implement this method)"""
         pass
 
 
     @abstractmethod
     def solve(self):
         """Solve the FE equation system(s) at a given time step.
-        (Each derived concrete class must implement this method)"""
+        (Each derived class must implement this method)"""
         pass
 
 
@@ -114,7 +114,7 @@ class KS_DefaultScheme(KS_AbstractScheme):
     Deafult Keller-Segel space/time scheme.
 
     Specifically, we define the scheme (1,1,1,0), using the notation
-    of [Alba N.I., TFG]
+    of [Alba N.I., TFG](https://rodin.uca.es/xmlui/bitstream/handle/10498/21139/TFG.pdf)
     """
 
     def __init__( self, mesh, fe_order, dt, t_init=0.,
@@ -156,3 +156,57 @@ class KS_DefaultScheme(KS_AbstractScheme):
         # Compute u
         #
         solve ( self.a_u == self.f_u, self.u )
+
+class KS_MatrixDefaultScheme(KS_AbstractScheme):
+    """
+    Deafult Keller-Segel space/time scheme. Underlying FE matrices are
+    explicitly build
+    """
+
+    def __init__( self, mesh, fe_order, dt, t_init=0.,
+                  k0=1, k1=1, k2=1, k3=1, k4=1 ):
+        super().__init__(mesh, fe_order, dt, t_init, k0, k1, k2, k3, k4)
+
+
+    def build_fe_scheme(self):
+        """
+        Define variational equations and FE systems which define current scheme
+        """
+        u, ub = TrialFunction(self.Uh), TestFunction(self.Uh)
+        v, vb = TrialFunction(self.Vh), TestFunction(self.Vh)
+        #
+        # Define variational formulation for u and v
+        #
+        dt, k0, k1, k2, k3, k4 \
+            = self.dt, self.k0, self.k1, self.k2, self.k3, self.k4
+
+        # self.a_u = u*ub * dx + dt*k0*dot(grad(u), grad(ub)) * dx \
+        #            - dt*k1*u*dot(self.grad_v, grad(ub)) * dx
+        # self.f_u = self.u0*ub * dx
+
+        # self.a_v = v*vb * dx + dt*k2*dot(grad(v), grad(vb)) * dx \
+        #       + dt*k3*v*vb * dx
+        # self.f_v = (self.v0*vb + dt*k4*self.u0*vb) * dx
+
+        # Mass matrix
+        self.M = assemble( u*ub*dx )
+
+        # Diffusion matrix
+        self.L = assemble( dot(grad(u), grad(ub))*dx )
+
+
+    def solve(self):
+        """Compute u and v"""
+        # #
+        # # Compute v
+        # #
+        # solve ( self.a_v == self.f_v, self.v )
+        # #
+        # # Compute gradient of v
+        # self.grad_v.assign( project( grad(self.v), self.Wh ) )
+        #
+        # Compute u
+        #
+        A = self.M + self.dt*self.L
+        b = dot(self.M, self.u0.vector())
+        solve ( A, self.u.vector(), b)

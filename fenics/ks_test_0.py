@@ -1,3 +1,13 @@
+#
+# Keller-Segel Test 0
+# ===================
+#
+# We explore the suitability of FEniCS for solving Keller-Segel equations.
+#
+# We use a time scheme (1,1,1,0), notation from [Alba N.I.,
+# TFG](https://rodin.uca.es/xmlui/bitstream/handle/10498/21139/TFG.pdf),
+# and data from [Chertok-Kurganov: 2008]
+#
 from fenics import *
 import matplotlib.pyplot as plt
 set_log_level(30) # Only warnings (default: 20, information of general interet)

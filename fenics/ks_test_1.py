@@ -1,3 +1,9 @@
+#
+# Keller-Segel Test 1
+# ===================
+#
+# First object-oriented FEniCS script for solving Keller-Segel equations.
+#
 from fenics import *
 import matplotlib.pyplot as plt
 set_log_level(30) # Only warnings (default: 20, information of general interet)
@@ -90,25 +96,33 @@ class KellerSegelTest(object):
             #
             # Plot
             #
+            t = self.t
             if (iter % 10 == 0): # Only draw some fotograms
-                plot(u, title=f"u, t={self.t:.2e}", mode="warp")
+                plot(u, title=f"u, t={t:.2e}", mode="warp")
                 plt.show()
-        return {'iter': iter, 't': self.t, 'u': u, 'v': v}
+        return {'iter': iter, 't': t, 'u': u, 'v': v}
 
 if( __name__ == "__main__" ):
     #
-    # Read all the data from a parameters file
+    # Build mesh and define data
     #
-    import data.chertok_kurganov as dat
-    dat.reset(_nx = 60)
-    plot(dat.mesh)
-
-    ks_test = KellerSegelTest( dat.mesh, dat.fe_order, dat.dt )
+    nx = 60
+    mesh = RectangleMesh(p0=Point(-0.5, -0.5), p1=Point(0.5, 0.5), nx=nx, ny=nx)
+    plot(mesh)
+    #
+    # Build K-S test object
+    #
+    fe_order = 1
+    ks_test = KellerSegelTest( mesh, fe_order, dt=1.e-6 )
     #
     # Define C-K initial conditions
     #
-    ks_test.set_u( dat.u_init )
-    ks_test.set_v( dat.v_init )
+    u_init = Expression("1000*exp(-100*(x[0]*x[0]+x[1]*x[1]))",
+                        degree=fe_order)
+    v_init = Expression("500*exp(-50*(x[0]*x[0]+x[1]*x[1]))",
+                        degree=fe_order)
+    ks_test.set_u( u_init )
+    ks_test.set_v( v_init )
     #
     # Run time iterations
     #

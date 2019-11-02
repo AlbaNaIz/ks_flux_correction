@@ -1,3 +1,14 @@
+#
+# Keller-Segel Test 3
+# ===================
+#
+# Third version of object-oriented FEniCS program for solving
+# Keller-Segel equations.
+#
+# We extend the use of custom packages, creating a 'keller_segel'
+# package for the purpose of storing the classes which define each
+# concrete Keller-Segel numerical scheme.
+#
 from keller_segel import KS_DefaultScheme as KellerSegelScheme
 from numpy.testing import assert_approx_equal
 
