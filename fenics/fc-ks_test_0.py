@@ -1,16 +1,14 @@
 #
-# Keller-Segel Test 3
-# ===================
+# Flux-Correction Keller-Segel Test 0
+# ===================================
 #
-# Third version of object-oriented FEniCS program for solving
-# Keller-Segel equations.
-#
-# We extend the use of custom packages, creating a 'keller_segel'
-# package for the purpose of storing the classes which define each
-# concrete Keller-Segel numerical scheme.
+# In this test we use FEniCS for explicitly building and solving the
+# K-S FE equation system,that is, we explicitly buy FE matrices and
+# FE RHS vectors. This work is done by the class KS_MatrixDefaultScheme
+# in the module keller_segel.
 #
 
-from keller_segel import KS_DefaultScheme as KellerSegelScheme
+from keller_segel import KS_MatrixDefaultScheme as KellerSegelScheme
 from numpy.testing import assert_approx_equal
 
 if( __name__ == "__main__" ):

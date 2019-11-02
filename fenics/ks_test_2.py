@@ -6,6 +6,7 @@
 # Keller-Segel equations. We explore the use of custom packages for
 # storing the data which define each concrete numerical test
 #
+
 from fenics import *
 import matplotlib.pyplot as plt
 set_log_level(30) # Only warnings (default: 20, information of general interet)

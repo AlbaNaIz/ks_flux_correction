@@ -1,5 +1,6 @@
 from fenics import *
 import matplotlib.pyplot as plt
+import time
 
 set_log_level(30) # Only warnings (default: 20, information of general interet)
 
@@ -28,8 +29,7 @@ class KS_AbstractScheme(ABC):
         # Build FE spaces and FE functions
         #
         assert(fe_order>0)
-        self.Uh = FunctionSpace(mesh, "Lagrange", fe_order)
-        self.Vh = self.Uh
+        self.Vh = FunctionSpace(mesh, "Lagrange", fe_order)
         #
         # Space for interpolation of gradient(v)
         #
@@ -38,7 +38,7 @@ class KS_AbstractScheme(ABC):
         #
         # Variables to store solution at previous time step
         #
-        self.u0 = Function(self.Uh);
+        self.u0 = Function(self.Vh);
         self.v0 = Function(self.Vh);
         #
         # Construct variational formulation for u and v
@@ -62,7 +62,7 @@ class KS_AbstractScheme(ABC):
 
 
     def set_u(self, u_init):
-        self.u0.assign( interpolate(u_init, self.Uh) )
+        self.u0.assign( interpolate(u_init, self.Vh) )
 
 
     def set_v(self, v_init):
@@ -73,7 +73,7 @@ class KS_AbstractScheme(ABC):
         #
         # Run time iterations
         #
-        self.u, self.v = Function(self.Uh), Function(self.Vh)
+        self.u, self.v = Function(self.Vh), Function(self.Vh)
         for iter in range(nt_steps):
             self.t = self.t + self.dt
             print(f"Time iteration {iter}, t={self.t:.2e}")
@@ -110,11 +110,11 @@ class KS_AbstractScheme(ABC):
 
 
 class KS_DefaultScheme(KS_AbstractScheme):
-    """
-    Deafult Keller-Segel space/time scheme.
+    """Deafult Keller-Segel space/time scheme.
 
     Specifically, we define the scheme (1,1,1,0), using the notation
-    of [Alba N.I., TFG](https://rodin.uca.es/xmlui/bitstream/handle/10498/21139/TFG.pdf)
+    of [Alba N.I.,
+    TFG](https://rodin.uca.es/xmlui/bitstream/handle/10498/21139/TFG.pdf)
     """
 
     def __init__( self, mesh, fe_order, dt, t_init=0.,
@@ -124,9 +124,9 @@ class KS_DefaultScheme(KS_AbstractScheme):
 
     def build_fe_scheme(self):
         """
-        Define variational equations and FE systems which define current scheme
+        Create variational equations and FE systems which define current scheme
         """
-        u, ub = TrialFunction(self.Uh), TestFunction(self.Uh)
+        u, ub = TrialFunction(self.Vh), TestFunction(self.Vh)
         v, vb = TrialFunction(self.Vh), TestFunction(self.Vh)
         #
         # Define variational formulation for u and v
@@ -172,7 +172,7 @@ class KS_MatrixDefaultScheme(KS_AbstractScheme):
         """
         Define variational equations and FE systems which define current scheme
         """
-        u, ub = TrialFunction(self.Uh), TestFunction(self.Uh)
+        u, ub = TrialFunction(self.Vh), TestFunction(self.Vh)
         v, vb = TrialFunction(self.Vh), TestFunction(self.Vh)
         #
         # Define variational formulation for u and v
@@ -194,19 +194,32 @@ class KS_MatrixDefaultScheme(KS_AbstractScheme):
         # Diffusion matrix
         self.L = assemble( dot(grad(u), grad(ub))*dx )
 
+        # Matrix for the v-equation:
+        self.Av = (1 + k3*dt)*self.M + k2*dt*self.L
+
 
     def solve(self):
         """Compute u and v"""
-        # #
-        # # Compute v
-        # #
-        # solve ( self.a_v == self.f_v, self.v )
-        # #
-        # # Compute gradient of v
-        # self.grad_v.assign( project( grad(self.v), self.Wh ) )
+
+        dt, k0, k1 = self.dt, self.k0, self.k1
+
         #
-        # Compute u
+        # 1. Compute v and gradient of v
         #
-        A = self.M + self.dt*self.L
-        b = dot(self.M, self.u0.vector())
-        solve ( A, self.u.vector(), b)
+        b = self.M * (self.v0.vector() + self.k4*dt*self.u0.vector())
+        solve ( self.Av, self.v.vector(), b )  # Solve A*v = b
+        grad_v = project( grad(self.v), self.Wh )
+
+        #
+        # 2. Compute u
+        #
+
+        # 2.1 Assemble chemotaxis transport matrix
+        u, ub = TrialFunction(self.Vh), TestFunction(self.Vh)
+        v, vb = TrialFunction(self.Vh), TestFunction(self.Vh)
+        K = assemble( u*dot(grad_v, grad(ub)) * dx )
+
+        # 2.2 Define system and solve it
+        A = self.M + k0*dt*self.L - k1*dt*K
+        b = self.M * self.u0.vector()
+        solve (A, self.u.vector(), b)  # Solve A*u = b
