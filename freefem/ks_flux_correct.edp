@@ -12,6 +12,7 @@ include "getARGV.idp";
 // mesh Th = buildmesh(Gamma(nx));
 int nx = getARGV("nx", 5);
 mesh Th = square(nx, nx, [x-0.5, y-0.5]);
+plot(Th, wait=true);
 
 // Unknown and test functions
 fespace Uh(Th, P1);

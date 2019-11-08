@@ -4,8 +4,7 @@
 #
 # In this test we use FEniCS for explicitly building and solving the
 # K-S FE equation system,that is, we explicitly buy FE matrices and
-# FE RHS vectors. This work is done by the class KS_MatrixDefaultScheme
-# in the module keller_segel.
+# FE RHS vectors.
 #
 
 from keller_segel import KS_MatrixDefaultScheme as KellerSegelScheme
