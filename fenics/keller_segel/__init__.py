@@ -43,10 +43,18 @@ class KS_AbstractScheme(ABC):
         self.u0 = Function(self.Vh);
         self.v0 = Function(self.Vh);
         #
-        # Construct variational formulation for u and v
+        # Prepare dictonary for defining custom parameters
         #
-        # self.build_fe_scheme()
+        self.parameters = {}
 
+    def check_parameter(self, parameter_key, parameter_value=True):
+        "Checks if a parameter exists and matches a given value"
+        return ( parameter_key in self.parameters and
+                 self.parameters[parameter_key] == parameter_value )
+
+    def set_parameter(self, parameter_key, parameter_value=True):
+        "Sets a value for a parameter exists"
+        self.parameters[parameter_key] = parameter_value
 
     @abstractmethod
     def build_fe_scheme(self):
@@ -250,11 +258,6 @@ class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
     def __init__( self, mesh, fe_order, dt, t_init=0.,
                   k0=1, k1=1, k2=1, k3=1, k4=1 ):
         super().__init__(mesh, fe_order, dt, t_init, k0, k1, k2, k3, k4)
-        self.save_matrices = False
-
-    def save_all_matrices(self, true_or_false):
-        "Select if matrices will be saved to respective files"
-        self.save_matrices = true_or_false
 
     def build_fe_scheme(self):
         """
@@ -281,46 +284,13 @@ class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
         self.L = assemble( dot(grad(u), grad(ub))*dx )
 
         # Matrix for the v-equation:
-        self.Av = (1 + k3*dt)*self.M + k2*dt*self.L
+        self.Av = (1 + k3*dt)*self.ML + k2*dt*self.L
 
         # Save matrices
-        if self.save_matrices:
+        if self.check_parameter("save_matrices"):
             save_coo_matrix(self.M, "M.matrix.coo")
             save_coo_matrix(self.ML, "ML.matrix.coo")
             save_coo_matrix(self.L, "L.matrix.coo")
-
-    # def compute_artificial_diffusion_v0(self, K):
-    #     # create object from underlying matrix library
-    #     kmat = as_backend_type(K).mat()
-    #     dmat = kmat.duplicate()
-
-    #     # copy transpose of kmat into dmat
-    #     kmat.transpose(dmat)
-
-    #     # get values from kmat and dmat
-    #     I, C, kVals = kmat.getValuesCSR()
-    #     _, _, dVals = dmat.getValuesCSR()
-
-    #     # compute values for matrix D
-    #     for row in range(len(I)-1):
-    #         row_sum = 0
-    #         k_diag = None # Pointer to diagonal in current row
-    #         for k in range(I[row], I[row+1]): # For non zero columns in row
-    #             col = C[k]
-    #             if row == col:
-    #                 k_diag = k # Diagonal position localized
-    #             else:
-    #                 dVals[k] = max(0, max(-kVals[k], -dVals[k])) # Compute diffusion
-    #                 row_sum += dVals[k]
-    #         assert k_diag!=None
-    #         dVals[k_diag] = -row_sum
-    #     # dvals = - reduce(numpy.minimum, (kvals, dvals, 0))
-    #     # np.where (i-j==0, 0, dvals)   # Put 0 in diagonal positions
-
-    #     # copy values into matrix D
-    #     dmat.setValuesCSR(I, C, dVals)
-    #     dmat.assemble()
-    #     return PETScMatrix(dmat)
 
     def compute_artificial_diffusion(self, K):
         """Define an artifficial diffusion matrix D such that
@@ -366,7 +336,7 @@ class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
         ##,-------------------------------------------------------------
         ##| 1. compute v and gradient of v
         ##`-------------------------------------------------------------
-        b = self.M * (self.v0.vector() + k4*dt*self.u0.vector())
+        b = self.ML * (self.v0.vector() + k4*dt*self.u0.vector())
         solve ( self.Av, self.v.vector(), b )  # Solve A*v = b
         grad_v = project( grad(self.v), self.Wh )
 
@@ -393,7 +363,7 @@ class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
         #
         self.KL = self.D + self.K
 
-        if self.save_matrices:
+        if self.check_parameter("save_matrices"):
             save_coo_matrix(self.K, "K.matrix.coo")
             save_coo_matrix(self.D, "D.matrix.coo")
             save_coo_matrix(self.KL, "KL.matrix.coo")

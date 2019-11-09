@@ -35,8 +35,7 @@ if( __name__ == "__main__" ):
     #
     # Run time iterations
     #
-    ks_test.save_all_matrices(True) # Save all FE matrices to respective files
-    print(ks_test.save_matrices)
+    ks_test.set_parameter("save_matrices")
     result = ks_test.run( nt_steps=1,
                           break_when_negative_u=True, plot_u=False )
 
@@ -44,9 +43,12 @@ if( __name__ == "__main__" ):
     # Make sure that results match what happended in our previous tests!
     #
 
-    # # 1) Positivity is broken at iteration 10
-    # assert result['iter']==10
+    # 1) Positivity at this iteration
+    assert min(result['u'].vector()>0)
+    assert min(result['v'].vector()>0)
 
-    # 2) max(u) is over 3.32*10^3
+    # 2) max(u) and max(v) match the results obtained in previous tests
     max_u = max(result['u'].vector())
-    # assert_approx_equal(max_u, 3.328079e+03)
+    assert_approx_equal(max_u, 135.532128549)
+    max_v = max(result['v'].vector())
+    assert_approx_equal(max_v, 183.930644124)
