@@ -45,7 +45,7 @@ class KS_AbstractScheme(ABC):
         #
         # Construct variational formulation for u and v
         #
-        self.build_fe_scheme()
+        # self.build_fe_scheme()
 
 
     @abstractmethod
@@ -73,6 +73,10 @@ class KS_AbstractScheme(ABC):
 
     def run(self, nt_steps, break_when_negative_u=False,
             plot_u=True):
+        #
+        # Build variational formulation and matrices
+        #
+        self.build_fe_scheme()
         #
         # Run time iterations
         #
@@ -173,12 +177,6 @@ def save_coo_matrix(A, filename):
     np.savetxt(filename,
             np.c_[coo_mat.row, coo_mat.col, coo_mat.data],
             fmt=['%d', '%d', '%.16f'])
-    # x_coo = x.tocoo()
-    # row = coo_mat.row
-    # col = coo_mat.col
-    # data = coo_mat.data
-    # shape = coo_mat.shape
-    # np.savez(filename, row=row, col=col, data=data, shape=shape)
 
 class KS_MatrixDefaultScheme(KS_AbstractScheme):
     """
@@ -242,7 +240,7 @@ class KS_MatrixDefaultScheme(KS_AbstractScheme):
 #==============================================================================
 
 
-class KS_FC_DefaultScheme(KS_AbstractScheme):
+class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
 
     """
     Deafult Keller-Segel space/time scheme. Underlying FE matrices are
@@ -252,7 +250,11 @@ class KS_FC_DefaultScheme(KS_AbstractScheme):
     def __init__( self, mesh, fe_order, dt, t_init=0.,
                   k0=1, k1=1, k2=1, k3=1, k4=1 ):
         super().__init__(mesh, fe_order, dt, t_init, k0, k1, k2, k3, k4)
+        self.save_matrices = False
 
+    def save_all_matrices(self, true_or_false):
+        "Select if matrices will be saved to respective files"
+        self.save_matrices = true_or_false
 
     def build_fe_scheme(self):
         """
@@ -282,33 +284,123 @@ class KS_FC_DefaultScheme(KS_AbstractScheme):
         self.Av = (1 + k3*dt)*self.M + k2*dt*self.L
 
         # Save matrices
-        save_matrices = True
-        if save_matrices:
+        if self.save_matrices:
             save_coo_matrix(self.M, "M.matrix.coo")
             save_coo_matrix(self.ML, "ML.matrix.coo")
+            save_coo_matrix(self.L, "L.matrix.coo")
+
+    # def compute_artificial_diffusion_v0(self, K):
+    #     # create object from underlying matrix library
+    #     kmat = as_backend_type(K).mat()
+    #     dmat = kmat.duplicate()
+
+    #     # copy transpose of kmat into dmat
+    #     kmat.transpose(dmat)
+
+    #     # get values from kmat and dmat
+    #     I, C, kVals = kmat.getValuesCSR()
+    #     _, _, dVals = dmat.getValuesCSR()
+
+    #     # compute values for matrix D
+    #     for row in range(len(I)-1):
+    #         row_sum = 0
+    #         k_diag = None # Pointer to diagonal in current row
+    #         for k in range(I[row], I[row+1]): # For non zero columns in row
+    #             col = C[k]
+    #             if row == col:
+    #                 k_diag = k # Diagonal position localized
+    #             else:
+    #                 dVals[k] = max(0, max(-kVals[k], -dVals[k])) # Compute diffusion
+    #                 row_sum += dVals[k]
+    #         assert k_diag!=None
+    #         dVals[k_diag] = -row_sum
+    #     # dvals = - reduce(numpy.minimum, (kvals, dvals, 0))
+    #     # np.where (i-j==0, 0, dvals)   # Put 0 in diagonal positions
+
+    #     # copy values into matrix D
+    #     dmat.setValuesCSR(I, C, dVals)
+    #     dmat.assemble()
+    #     return PETScMatrix(dmat)
+
+    def compute_artificial_diffusion(self, K):
+        """Define an artifficial diffusion matrix D such that
+         k_{ij} + d_{ij} >= 0 for all i,j"""
+
+        # create object from underlying matrix library
+        kmat = as_backend_type(K).mat()
+        dmat = kmat.duplicate()
+
+        # copy transpose of kmat into dmat
+        kmat.transpose(dmat)
+
+        # get values from kmat and dmat
+        I, C, kVals = kmat.getValuesCSR()
+        _, _, dVals = dmat.getValuesCSR()
+
+        # compute values for matrix D
+        for row in range(len(I)-1):
+            row_sum = 0
+            k_diag = None # Pointer to diagonal in current row
+            for k in range(I[row], I[row+1]): # For non zero columns in row
+                col = C[k]
+                if row == col:
+                    k_diag = k # Diagonal position localized
+                else:
+                    dVals[k] = max(0, max(-kVals[k], -dVals[k])) # Compute diffusion
+                    row_sum += dVals[k]
+            assert k_diag!=None
+            dVals[k_diag] = -row_sum
+        # dvals = - reduce(numpy.minimum, (kvals, dvals, 0))
+        # np.where (i-j==0, 0, dvals)   # Put 0 in diagonal positions
+
+        # copy values into matrix D
+        dmat.setValuesCSR(I, C, dVals)
+        dmat.assemble()
+        return PETScMatrix(dmat)
 
     def solve(self):
         """Compute u and v"""
 
         dt, k0, k1, k4 = self.dt, self.k0, self.k1, self.k4
 
-        #
-        # 1. Compute v and gradient of v
-        #
+        ##,-------------------------------------------------------------
+        ##| 1. compute v and gradient of v
+        ##`-------------------------------------------------------------
         b = self.M * (self.v0.vector() + k4*dt*self.u0.vector())
         solve ( self.Av, self.v.vector(), b )  # Solve A*v = b
         grad_v = project( grad(self.v), self.Wh )
 
-        #
-        # 2. Compute u
-        #
+        ##,-------------------------------------------------------------
+        ##| 2. For u, define matrices using FCT scheme
+        ##`-------------------------------------------------------------
 
+        #
         # 2.1 Assemble chemotaxis transport matrix
+        #
         u, ub = TrialFunction(self.Vh), TestFunction(self.Vh)
         v, vb = TrialFunction(self.Vh), TestFunction(self.Vh)
-        K = assemble( u*dot(grad_v, grad(ub)) * dx )
+        self.K = assemble( u*dot(grad_v, grad(ub)) * dx )
 
-        # 2.2 Define system and solve it
-        A = self.M + k0*dt*self.L - k1*dt*K
-        b = self.M * self.u0.vector()
+        #
+        # 2.2 Define an artifficial diffusion matrix D such that
+        # k_{ij} + d_{ij} >= 0 for all i,j
+        #
+        self.D = self.compute_artificial_diffusion(self.K)
+
+        #
+        # 2.3 Eliminate all negative off-diagonal coefficients of K by
+        # adding artifficial diffusion
+        #
+        self.KL = self.D + self.K
+
+        if self.save_matrices:
+            save_coo_matrix(self.K, "K.matrix.coo")
+            save_coo_matrix(self.D, "D.matrix.coo")
+            save_coo_matrix(self.KL, "KL.matrix.coo")
+
+        ##,-------------------------------------------------------------
+        ##| 3. Define system for u and solve it
+        ##`-------------------------------------------------------------
+        A = self.ML + k0*dt*self.L - k1*dt*self.KL
+        b = self.ML * self.u0.vector()
         solve (A, self.u.vector(), b)  # Solve A*u = b
