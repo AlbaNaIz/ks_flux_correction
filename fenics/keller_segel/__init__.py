@@ -292,7 +292,7 @@ class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
             save_coo_matrix(self.ML, "ML.matrix.coo")
             save_coo_matrix(self.L, "L.matrix.coo")
 
-    def compute_artificial_diffusion(self, K):
+    def compute_artificial_diffusion_v0(self, K):
         """Define an artifficial diffusion matrix D such that
          k_{ij} + d_{ij} >= 0 for all i,j"""
 
@@ -328,6 +328,36 @@ class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
         dmat.assemble()
         return PETScMatrix(dmat)
 
+    def compute_artificial_diffusion(self, K):
+        """Define an artifficial diffusion matrix D such that
+         k_{ij} + d_{ij} >= 0 for all i,j"""
+
+        # create object from underlying matrix library
+        kmat = as_backend_type(K).mat()
+        dmat = kmat.duplicate()
+
+        # copy transpose of kmat into dmat
+        kmat.transpose(dmat)
+
+        # get values from kmat and dmat
+        I, C, kVals = kmat.getValuesCSR()
+        _, _, dVals = dmat.getValuesCSR()
+
+        # compute values for matrix D
+        for row in range(len(I)-1):
+            k0, k1 = I[row], I[row+1] # Pointers to begin and end of current row
+            k_diag = k0 + np.where( C[k0:k1] == row )[0][0] # Pointer to diagonal
+            # Compute max(-k_{ij}, -k_{ji}, 0 )
+            dVals[k0:k1] = np.maximum.reduce( (-kVals[k0:k1],
+                                               -dVals[k0:k1], np.zeros(k1-k0)) )
+            row_sum = sum(dVals[k0:k1]) - dVals[k_diag]
+            dVals[k_diag] = -row_sum
+
+        # copy values into matrix D
+        dmat.setValuesCSR(I, C, dVals)
+        dmat.assemble()
+        return PETScMatrix(dmat)
+
     def solve(self):
         """Compute u and v"""
 
@@ -341,7 +371,7 @@ class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
         grad_v = project( grad(self.v), self.Wh )
 
         ##,-------------------------------------------------------------
-        ##| 2. For u, define matrices using FCT scheme
+        ##| 2. Define matrices and compute low order solution, u
         ##`-------------------------------------------------------------
 
         #
@@ -349,7 +379,10 @@ class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
         #
         u, ub = TrialFunction(self.Vh), TestFunction(self.Vh)
         v, vb = TrialFunction(self.Vh), TestFunction(self.Vh)
-        self.K = assemble( u*dot(grad_v, grad(ub)) * dx )
+        C = assemble( u*dot(grad_v, grad(ub)) * dx )
+
+        # Add diffusion matrix (at RHS) => complete advect+diffusion operator
+        self.K = k1*C - k0*self.L;
 
         #
         # 2.2 Define an artifficial diffusion matrix D such that
@@ -363,14 +396,30 @@ class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
         #
         self.KL = self.D + self.K
 
+        #
+        # 2.4 Compute low order solution
+        #
+        A = self.ML - dt*self.KL
+        b = self.ML * self.u0.vector()
+        solve (A, self.u.vector(), b)  # Solve A*u = b
+
         if self.check_parameter("save_matrices"):
             save_coo_matrix(self.K, "K.matrix.coo")
             save_coo_matrix(self.D, "D.matrix.coo")
             save_coo_matrix(self.KL, "KL.matrix.coo")
 
         ##,-------------------------------------------------------------
-        ##| 3. Define system for u and solve it
+        ##| 3. Update u system to high order solution
         ##`-------------------------------------------------------------
-        A = self.ML + k0*dt*self.L - k1*dt*self.KL
+
+        #
+        # 3.1 Compute residuals, f_ij = (m_ij + d_ij)*(u_j-u_i)
+        #
+        self.FF = self.M - self.ML - dt*self.D
+
+        ##,-------------------------------------------------------------
+        ##| 4. Define system for u and solve it
+        ##`-------------------------------------------------------------
+        A = self.ML - dt*self.KL
         b = self.ML * self.u0.vector()
         solve (A, self.u.vector(), b)  # Solve A*u = b

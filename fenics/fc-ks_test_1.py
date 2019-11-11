@@ -49,6 +49,6 @@ if( __name__ == "__main__" ):
 
     # 2) max(u) and max(v) match the results obtained in previous tests
     max_u = max(result['u'].vector())
-    assert_approx_equal(max_u, 135.532128549)
+    assert_approx_equal(max_u, 135.53886011)
     max_v = max(result['v'].vector())
     assert_approx_equal(max_v, 183.930644124)
