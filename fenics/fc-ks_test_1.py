@@ -35,7 +35,7 @@ if( __name__ == "__main__" ):
     #
     # Run time iterations
     #
-    ks_test.set_parameter("save_matrices")
+    # ks_test.set_parameter("save_matrices")
     result = ks_test.run( nt_steps=1,
                           break_when_negative_u=True, plot_u=False )
 
