@@ -2,6 +2,7 @@ from fenics import *
 import numpy as np
 import matplotlib.pyplot as plt
 from time import time
+from petsc4py import PETSc
 
 # FEniCS: only warnings (default: 20, information of general interet)
 set_log_level(30)
@@ -42,6 +43,9 @@ except ImportError:
 from abc import ABC, abstractmethod
 
 #==============================================================================
+# class KS_AbstractScheme:
+#   Define abstract behaviour of all Keller-Segel objects
+#------------------------------------------------------------------------------
 
 class KS_AbstractScheme(ABC):
     """
@@ -96,7 +100,6 @@ class KS_AbstractScheme(ABC):
         Define variational formulation and FE system(s) which define current
         scheme (each derived class must implement this method)"""
         pass
-
 
     @abstractmethod
     def solve(self):
@@ -159,6 +162,9 @@ class KS_AbstractScheme(ABC):
 
 
 #==============================================================================
+# class KS_DefaultScheme:
+#   Usual KS implementation
+#------------------------------------------------------------------------------
 
 class KS_DefaultScheme(KS_AbstractScheme):
     """Deafult Keller-Segel space/time scheme.
@@ -210,6 +216,9 @@ class KS_DefaultScheme(KS_AbstractScheme):
 
 
 #==============================================================================
+# class KS_Matrix_DefaultScheme:
+#   Explicit building of linear system (matrix and rhs) for usual implementat.
+#------------------------------------------------------------------------------
 
 def save_coo_matrix(A, filename):
     "Save matrix A in a file, using COO format (i, j, value_ij)"
@@ -220,7 +229,7 @@ def save_coo_matrix(A, filename):
             np.c_[coo_mat.row, coo_mat.col, coo_mat.data],
             fmt=['%d', '%d', '%.16f'])
 
-class KS_MatrixDefaultScheme(KS_AbstractScheme):
+class KS_Matrix_DefaultScheme(KS_AbstractScheme):
     """
     Deafult Keller-Segel space/time scheme. Underlying FE matrices are
     explicitly build
@@ -280,6 +289,10 @@ class KS_MatrixDefaultScheme(KS_AbstractScheme):
 
 
 #==============================================================================
+# class KS_FluxCorrect_DefaultScheme:
+#   - Keller-Segel with flux-correction (FC)
+#   - Used Numba compiler for high performance (in FC updating of marices)
+#------------------------------------------------------------------------------
 
 @njit
 def index(array, item):
@@ -289,8 +302,9 @@ def index(array, item):
             break
     return idx[0]
 
-@njit(parallel=True)
-def compute_D_array(I, C, kVals, dVals):
+# @njit(parallel=True)
+@njit
+def compute_D_values(I, C, kVals, dVals):
     # 1. To parallize: initialize an output with the desired length
     out = np.empty(len(kVals))
     # 2. Use prange (and avoid "race conditions"!)
@@ -304,18 +318,136 @@ def compute_D_array(I, C, kVals, dVals):
         out[k_diag] = -row_sum
     return out
 
-    # # k_diag = k0 + np.where( C[k0:k1] == row )[0][0] # Pointer to diagonal
-    # k_diag = k0 + index(C[k0:k1], row)
-    # # Compute max(-k_{ij}, -k_{ji}, 0 )
-    # # dVals[k0:k1] = np.maximum.reduce( (-kVals[k0:k1],
-    # #                                    -dVals[k0:k1], np.zeros(k1-k0)) )
-    # dVals[k0:k1] = np.maximum( np.zeros(k1-k0),
-    #                            np.maximum(-kVals[k0:k1], -dVals[k0:k1] ) )
-    # row_sum = np.sum(dVals[k0:k1]) - dVals[k_diag]
-    # dVals[k_diag] = -row_sum
-    # return dVals[k0:k1]
+def update_F_values(F, u):
+    """
+    Update residuals, F_{ij}, so that  F_ij=0 if F_ij*(u_j-u_i) > 0
+    Arguments:
+      * F: PETScMatrix containing preliminar fluxes
+      * u: numpy array containing low orde solution
+    Returns:
+      PETScMatrx containing corrected fluxes
+    """
+    # create object from underlying matrix library and get values to numpy array
+    fMat = as_backend_type(F).mat()
+    I, C, fVals = fMat.getValuesCSR()
 
-class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
+    # Let F_ij=0 if F_ij*(u_j-u_i) > 0
+    result = np.empty(len(fVals))
+    for row in range(len(I)-1):
+        k0, k1 = I[row], I[row+1] # Pointers to begin and end of current row
+        u_ij = u[C[k0:k1]] - u[row]
+        result[k0:k1] = np.where(np.sign(u_ij)==np.sign(fVals[k0:k1]),
+                                 0, fVals[k0:k1])
+
+    # copy values into matrix D
+    fMat.setValuesCSR(I, C, fVals)
+    fMat.assemble()
+    return PETScMatrix(fMat)
+
+class CSR_Matrix(object):
+    """Container for a sparse matrix whose data is accesed using CSR
+    storage format
+
+    Current implementation assumes that the PETSC backend is being used
+    by FEniCS."""
+    def __init__(self, FEniCS_matrix=None):
+        self.FEniCS_matrix = FEniCS_matrix
+        if FEniCS_matrix != None:
+           underlying_PETSc_matrix = as_backend_type(self.FEniCS_matrix).mat()
+           self.update_internal_data(underlying_PETSc_matrix)
+
+    def update_internal_data(self, PETSc_matrix):
+        self.underlying_PETSc_matrix = PETSc_matrix
+        self.I, self.C, self.V = self.underlying_PETSc_matrix.getValuesCSR()
+        self.size = self.underlying_PETSc_matrix.size
+        self.nrows = self.size[0]
+        self.ncols = self.size[1]
+
+    def duplicate(self):
+        "Returns a new CSR_Matrix which is a copy of this"
+        new_PETSc_matrix = self.underlying_PETSc_matrix.duplicate()
+        new_CSR_matrix = CSR_Matrix()
+        new_CSR_matrix.update_internal_data(new_PETSc_matrix)
+        return new_CSR_matrix
+
+    def get_values_CSR(self):
+        return self.I, self.C, self.V
+
+    def set_values(self, values):
+        self.V = values
+        self.underlying_PETSc_matrix.setValuesCSR(self.I, self.C, self.V)
+        self.underlying_PETSc_matrix.assemble()
+
+    def build_tranpose_into_matrix(self, CSR_mat):
+        # Build a new PETSc matrix
+        transpose_mat = self.underlying_PETSc_matrix.duplicate()
+        # Copy transpose of underlying_matrix into transpose_mat
+        self.underlying_PETSc_matrix.transpose(transpose_mat)
+        # Assign transpose_mat as underlying PETSc matrix of CSR_mat
+        CSR_mat.update_internal_data(transpose_mat)
+
+    def to_FEniCS_matrix(self):
+        """Build a FEniCS matrix from current values internal CSR values or
+        from new values stored in 'values_array'
+        """
+        return PETScMatrix(self.underlying_PETSc_matrix)
+
+
+class Old_CSR_Matrix(object):
+    """
+    Store a sparse matrix in CSR format.
+
+    We assume that the PETSC backend is being used by FEniCS.
+    """
+    def __init__(self, fenics_matrix):
+        # Store fenics matrix
+        self.fenics_matrix = fenics_matrix
+        # Store PETSC (petsc4py) matrix (we assume fenics uses this backend)
+        self.underlying_matrix = as_backend_type(self.fenics_matrix).mat()
+        # Save matrix internal data (rows, pointer to columns, values)
+        self.I, self.C, self.V = self.underlying_matrix.getValuesCSR()
+        self.size = self.underlying_matrix.size
+        self.nrows = self.size[0]
+        self.ncols = self.size[1]
+
+    def get_row(self, row):
+        "Return list of columns and list of values for all the non-zero columns in row i"
+        # Get pointer to first column in a row
+        k0 = self.I[row]
+        # Pointer to end of colum in a row (if i is last row, k1=end of columns)
+        k1 = self.I[row+1] if row < self.nrows else self.ncols
+
+        return self.C[k0:k1], self.V[k0:k1]
+
+    def row_begin_end(self, i_row):
+        """Return pointers to data respective to begin and end
+        of nonzero columns in i_row"""
+        # Get pointer to first column in a row
+        k0 = self.I[i_row]
+        # Pointer to end of colum in a row (if i is last row, k1=end of columns)
+        k1 = self.I[i_row + 1] if i_row < self.nrows else self.ncols
+
+        return k0,k1
+
+    def row_diagonal(self, i_row, row_begin, row_end):
+        """Return pointer to data respective diagonal in i_row"""
+        k_diag = self.I[i_row] + index( self.C[row_begin:row_end], i_row )
+
+    def set_row_values(self, row, values):
+        """Modify values for all non-zero columns in a row"""
+        # Get pointer to first column in a row
+        k0 = self.I[row]
+        # Pointer to end of colum in a row (if i is last row, k1=end of columns)
+        k1 = self.I[row+1] if row < self.nrows else self.ncols
+
+        self.V[k0:k1] = values[:]
+
+    def assemble_values(self):
+        self.underlying_matrix.setValuesCSR(self.I, self.C, self.V)
+        self.underlying_matrix.assemble()
+
+
+class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
 
     """
     Deafult Keller-Segel space/time scheme. Underlying FE matrices are
@@ -359,67 +491,112 @@ class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
             save_coo_matrix(self.ML, "ML.matrix.coo")
             save_coo_matrix(self.L, "L.matrix.coo")
 
-    def compute_artificial_diffusion_v0(self, K):
-        """Define an artifficial diffusion matrix D such that
-         k_{ij} + d_{ij} >= 0 for all i,j"""
+    # def compute_artificial_diffusion_v0(self, K):
+    #     """Define an artifficial diffusion matrix D such that
+    #      k_{ij} + d_{ij} >= 0 for all i,j"""
 
-        # create object from underlying matrix library
-        kmat = as_backend_type(K).mat()
-        dmat = kmat.duplicate()
+    #     # create object from underlying matrix library
+    #     kMat = as_backend_type(K).mat()
+    #     dmat = kMat.duplicate()
 
-        # copy transpose of kmat into dmat
-        kmat.transpose(dmat)
+    #     # copy transpose of kMat into dmat
+    #     kMat.transpose(dmat)
 
-        # get values from kmat and dmat
-        I, C, kVals = kmat.getValuesCSR()
-        _, _, dVals = dmat.getValuesCSR()
+    #     # get values from kMat and dmat
+    #     I, C, kVals = kMat.getValuesCSR()
+    #     _, _, dVals = dmat.getValuesCSR()
 
-        # compute values for matrix D
-        for row in range(len(I)-1):
-            row_sum = 0
-            k_diag = None # Pointer to diagonal in current row
-            for k in range(I[row], I[row+1]): # For non zero columns in row
-                col = C[k]
-                if row == col:
-                    k_diag = k # Diagonal position localized
-                else:
-                    dVals[k] = max(0, max(-kVals[k], -dVals[k])) # Compute diffusion
-                    row_sum += dVals[k]
-            assert k_diag!=None
-            dVals[k_diag] = -row_sum
-        # dvals = - reduce(numpy.minimum, (kvals, dvals, 0))
-        # np.where (i-j==0, 0, dvals)   # Put 0 in diagonal positions
+    #     # compute values for matrix D
+    #     for row in range(len(I)-1):
+    #         row_sum = 0
+    #         k_diag = None # Pointer to diagonal in current row
+    #         for k in range(I[row], I[row+1]): # For non zero columns in row
+    #             col = C[k]
+    #             if row == col:
+    #                 k_diag = k # Diagonal position localized
+    #             else:
+    #                 dVals[k] = max(0, max(-kVals[k], -dVals[k])) # Compute diffusion
+    #                 row_sum += dVals[k]
+    #         assert k_diag!=None
+    #         dVals[k_diag] = -row_sum
+    #     # dvals = - reduce(numpy.minimum, (kvals, dvals, 0))
+    #     # np.where (i-j==0, 0, dvals)   # Put 0 in diagonal positions
 
-        # copy values into matrix D
-        dmat.setValuesCSR(I, C, dVals)
-        dmat.assemble()
-        return PETScMatrix(dmat)
+    #     # copy values into matrix D
+    #     dmat.setValuesCSR(I, C, dVals)
+    #     dmat.assemble()
+    #     return PETScMatrix(dmat)
+
+    # def compute_artificial_diffusion_v1(self, K):
+    #     """Define an artifficial diffusion matrix D such that
+    #      k_{ij} + d_{ij} >= 0 for all i,j"""
+
+    #     # create object from underlying matrix library
+    #     kMat = as_backend_type(K).mat()
+    #     dmat = kMat.duplicate()
+
+    #     # copy transpose of kMat into dmat
+    #     kMat.transpose(dmat)
+
+    #     # get values from kMat and dmat
+    #     I, C, kVals = kMat.getValuesCSR()
+    #     _, _, dVals = dmat.getValuesCSR()
+
+    #     # compute values for matrix D
+    #     # print(f"len(I)={len(I)}")
+    #     t0 = time()
+    #     dVals = compute_D_array(I, C, kVals, dVals)
+    #     print("  ...time (compute_D_array):", time()-t0)
+
+    #     # copy values into matrix D
+    #     dmat.setValuesCSR(I, C, dVals)
+    #     dmat.assemble()
+    #     return PETScMatrix(dmat)
 
     def compute_artificial_diffusion(self, K):
         """Define an artifficial diffusion matrix D such that
          k_{ij} + d_{ij} >= 0 for all i,j"""
 
-        # create object from underlying matrix library
-        kmat = as_backend_type(K).mat()
-        dmat = kmat.duplicate()
+        # 1) Create object from underlying matrix library
+        K_mat = CSR_Matrix(K)
+        # And get arrays of values stored in K_mat
+        K_I = K_mat.I; K_C = K_mat.C; K_vals = K_mat.V
 
-        # copy transpose of kmat into dmat
-        kmat.transpose(dmat)
+        # 2) Build array of values for the transpose of K_mat
+        K_petsc = K_mat.underlying_matrix
+        T_mat = K_petsc.duplicate()
+        # Copy transpose of K_mat into T_mat
+        K_petsc.transpose(T_mat)
+        # Get array of internal values of T_mat
+        _, _, T_vals = T_mat.getValuesCSR()
 
-        # get values from kmat and dmat
-        I, C, kVals = kmat.getValuesCSR()
-        _, _, dVals = dmat.getValuesCSR()
+        # 3) Compute values max(0, -K_ij, -K_ji) for each row i
 
-        # compute values for matrix D
-        # print(f"len(I)={len(I)}")
-        t0 = time()
-        dVals = compute_D_array(I, C, kVals, dVals)
-        print("Time (compute_D_array):", time()-t0)
+        new_vals = np.zeros_like(K_vals)
+        for i_row in range(K_mat.nrows):
+            # Get pointers to non-zero elements
+            k0, k1 = K_mat.row_begin_end(i_row)
 
-        # copy values into matrix D
-        dmat.setValuesCSR(I, C, dVals)
-        dmat.assemble()
-        return PETScMatrix(dmat)
+            # Compute values before diagonal
+            zeros = np.zeros(k1-k0)
+            new_vals[k0:k1] = np.maximum( zeros,
+                np.maximum(-K_vals[k0:k1], -T_vals[k0:k1]) )
+
+            # Let $K_{ii} = - \sum_{j\neq i} K_{ij}
+            k_diag = K_mat.row_diagonal(i_row, row_begin=k0, row_end=k1)
+            new_vals[k_diag] = 0
+            row_sum = np.sum(new_vals[k0:k1])
+            new_vals[k_diag] = -row_sum
+
+        #
+        # 4) Store new values in K_mat
+        #
+        K_mat.V = new_vals
+        K_mat.assemble_values()
+
+        print(K_I, K_C, K_vals)
+        return PETScMatrix(K_petsc)
+
 
     def solve(self):
         """Compute u and v"""
@@ -448,10 +625,30 @@ class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
         self.K = k1*C - k0*self.L;
 
         #
-        # 2.2 Define an artifficial diffusion matrix D such that
+        # 2.2 Define D. It is an artifficial diffusion matrix D=d_{ij} such that
         # k_{ij} + d_{ij} >= 0 for all i,j
         #
-        self.D = self.compute_artificial_diffusion(self.K)
+        # self.D = self.compute_artificial_diffusion(self.K)
+
+        # Build object to access to the FEniCS matrix as K a CSR matrix
+        K_CSR = CSR_Matrix(self.K)
+        # Get arrays defining the storage of K in CSR sparse matrix format,
+        I, C, K_vals = K_CSR.get_values_CSR()
+
+        # Build a new CSR matrix chich for the target matrix D
+        D_CSR = K_CSR.duplicate()
+        # Temporarily, we use the matrix D_CSR for building the transpose of K
+        K_CSR.build_tranpose_into_matrix(D_CSR)
+        # Get values for the transpose of K
+        _, _, T_vals = D_CSR.get_values_CSR()
+
+        # Build array with values max(0, -K_ij, -K_ji) for each row i
+        D_vals = compute_D_values(I, C, K_vals, T_vals)
+
+        # Create the new matrix D, storing the computed array D_vals
+        D_CSR.set_values(D_vals)
+        self.D =  D_CSR.to_FEniCS_matrix()
+
 
         #
         # 2.3 Eliminate all negative off-diagonal coefficients of K by
@@ -480,9 +677,41 @@ class KS_FC_DefaultScheme(KS_MatrixDefaultScheme):
         #
         self.FF = self.M - self.ML - dt*self.D
 
-        ##,-------------------------------------------------------------
-        ##| 4. Define system for u and solve it
-        ##`-------------------------------------------------------------
-        A = self.ML - dt*self.KL
-        b = self.ML * self.u0.vector()
-        solve (A, self.u.vector(), b)  # Solve A*u = b
+        if self.check_parameter("save_matrices"):
+            save_coo_matrix(self.FF, "FF_previous.matrix.coo")
+
+        ## Update residuals:  FF_ij=0 if FF_ij*(u_j-u_i) > 0
+
+        # # Get underlying backend matrix. We assume backend is PETSC
+        # # and type(fMat)==<class 'petsc4py.PETSc.Mat'>
+        # # For a whole description of this class, see e.g.
+        # # https://www.mcs.anl.gov/petsc/petsc4py-current/docs/apiref/petsc4py.PETSc.Mat-class.html
+        # fMat = as_backend_type(self.FF).mat()
+
+        # # Let F_ij=0 if F_ij*(u_j-u_i) > 0
+        # result = np.empty(len(fVals))
+        # n = len(I)
+        # for i in range(n-1):
+        #     k0, k1 = I[row], I[row+1] # Pointers to begin and end of current row
+        #     u_ij = u[C[k0:k1]] - u[row]
+        #     result[k0:k1] = np.where(np.sign(u_ij)==np.sign(fVals[k0:k1]),
+        #                          0, fVals[k0:k1])
+
+        # # copy values into matrix D
+        # fMat.setValuesCSR(I, C, fVals)
+        # fMat.assemble()
+        # self.FF = PETScMatrix(fMat)
+
+        # t0 = time()
+        # self.FF = update_F_values(self.FF, self.u.vector())
+        # print("  ...time (update_F_values):", time()-t0)
+
+        # if self.check_parameter("save_matrices"):
+        #     save_coo_matrix(self.FF, "FF.matrix.coo")
+
+        #
+        # 3.2.  Compute the +,- sums of antidifusive fluxes to node i
+        #
+        # n = len(u)
+        # for i in range(n-1):
+        #     k0, k1 = I[row], I[row+1] # Pointers to begin and end of current row

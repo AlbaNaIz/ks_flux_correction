@@ -10,7 +10,7 @@
 # the inspection of the intermediate matrices.
 #
 
-from keller_segel import KS_FC_DefaultScheme
+from keller_segel import KS_FluxCorrect_DefaultScheme
 from keller_segel import plot, plt
 from numpy.testing import assert_approx_equal
 
@@ -26,7 +26,7 @@ if( __name__ == "__main__" ):
     #
     # Define test as a concrete Keller-Segel scheme
     #
-    ks_test = KS_FC_DefaultScheme( dat.mesh, dat.fe_order, dat.dt )
+    ks_test = KS_FluxCorrect_DefaultScheme( dat.mesh, dat.fe_order, dat.dt )
     #
     # Define C-K initial conditions
     #
@@ -35,7 +35,7 @@ if( __name__ == "__main__" ):
     #
     # Run time iterations
     #
-    # ks_test.set_parameter("save_matrices")
+    ks_test.set_parameter("save_matrices")
     result = ks_test.run( nt_steps=1,
                           break_when_negative_u=True, plot_u=False )
 

@@ -7,7 +7,7 @@
 # FE RHS vectors.
 #
 
-from keller_segel import KS_MatrixDefaultScheme as KellerSegelScheme
+from keller_segel import KS_Matrix_DefaultScheme
 from numpy.testing import assert_approx_equal
 
 if( __name__ == "__main__" ):
@@ -19,7 +19,7 @@ if( __name__ == "__main__" ):
     #
     # Define test as a concrete Keller-Segel scheme
     #
-    ks_test = KellerSegelScheme( dat.mesh, dat.fe_order, dat.dt )
+    ks_test = KS_Matrix_DefaultScheme( dat.mesh, dat.fe_order, dat.dt )
     #
     # Define C-K initial conditions
     #
@@ -28,7 +28,8 @@ if( __name__ == "__main__" ):
     #
     # Run time iterations
     #
-    result = ks_test.run( nt_steps=100, break_when_negative_u=True )
+    result = ks_test.run( nt_steps=100,
+                          break_when_negative_u=True, plot_u=False)
 
     #
     # Make sure that results match what happended in our previous tests!
