@@ -6,7 +6,8 @@ from keller_segel.matrix_default_scheme import (
     KS_Matrix_DefaultScheme, save_coo_matrix )
 
 # Import numba high-performance functions
-from keller_segel.numba_code import index, compute_D_values
+from keller_segel.numba_optimized import (
+    index, compute_D_values, update_F_values )
 
 #==============================================================================
 # class KS_FluxCorrect_DefaultScheme:
@@ -43,14 +44,18 @@ class CSR_Matrix(object):
         return new_CSR_matrix
 
     def get_values_CSR(self):
+        "Get data arrays defining content of current matrix, using CSR format"
         return self.I, self.C, self.V
 
     def set_values(self, values):
+        "Set content of this matrix, assuming same nozero rows and columns"
         self.V = values
         self.underlying_PETSc_matrix.setValuesCSR(self.I, self.C, self.V)
         self.underlying_PETSc_matrix.assemble()
 
     def build_tranpose_into_matrix(self, CSR_mat):
+        """Build into a CSR_Matrix the transpose of this.
+        warning: previous contents of CSR_mat are not deleted, memory leak?"""
         # Build a new PETSc matrix
         transpose_mat = self.underlying_PETSc_matrix.duplicate()
         # Copy transpose of underlying_matrix into transpose_mat
@@ -141,9 +146,8 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         # 2.2 Define D. It is an artifficial diffusion matrix D=d_{ij} such that
         # k_{ij} + d_{ij} >= 0 for all i,j
         #
-        # self.D = self.compute_artificial_diffusion(self.K)
 
-        # Build object to access to the FEniCS matrix as K a CSR matrix
+        # Build object to access the FEniCS matrix as K a CSR matrix
         K_CSR = CSR_Matrix(self.K)
         # Get arrays defining the storage of K in CSR sparse matrix format,
         I, C, K_vals = K_CSR.get_values_CSR()
@@ -161,7 +165,6 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         # Create the new matrix D, storing the computed array D_vals
         D_CSR.set_values(D_vals)
         self.D =  D_CSR.to_FEniCS_matrix()
-
 
         #
         # 2.3 Eliminate all negative off-diagonal coefficients of K by
@@ -181,6 +184,11 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
             save_coo_matrix(self.D, "D.matrix.coo")
             save_coo_matrix(self.KL, "KL.matrix.coo")
 
+
+        if self.check_parameter("only_low_order_solution"):
+            print("Computed the low order solution (only!!)")
+            return()
+
         ##,-------------------------------------------------------------
         ##| 3. Update u system to high order solution
         ##`-------------------------------------------------------------
@@ -188,21 +196,26 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         #
         # 3.1 Compute residuals, f_ij = (m_ij + d_ij)*(u_j-u_i)
         #
-        self.FF = self.M - self.ML - dt*self.D
+        self.F = self.M - self.ML - dt*self.D
 
         if self.check_parameter("save_matrices"):
-            save_coo_matrix(self.FF, "FF_previous.matrix.coo")
+            save_coo_matrix(self.F, "FF_previous.matrix.coo")
 
-        ## Update residuals:  FF_ij=0 if FF_ij*(u_j-u_i) > 0
+        # ····· Update residuals: F_ij=0 if F_ij*(u_j-u_i) > 0
 
-        # # Get underlying backend matrix. We assume backend is PETSC
-        # # and type(fMat)==<class 'petsc4py.PETSc.Mat'>
-        # # For a whole description of this class, see e.g.
-        # # https://www.mcs.anl.gov/petsc/petsc4py-current/docs/apiref/petsc4py.PETSc.Mat-class.html
-        # fMat = as_backend_type(self.FF).mat()
+        # Build object to access the FEniCS matrix as K a CSR matrix
+        F_CSR = CSR_Matrix(self.F)
+        # Get arrays defining the storage of K in CSR sparse matrix format,
+        I, C, F_vals = K_CSR.get_values_CSR()
+        # Update F_vals array with values F_ij=0 if F_ij*(u_j-u_i) > 0
+        F_vals = update_F_values(I, C, F_vals, U)
+        # Create the new matrix F, storing the computed array F_vals
+        F_CSR.set_values(F_vals)
+        # IS NECCESARY NEXT LINE?
+        # self.F =  F_CSR.to_FEniCS_matrix()
 
-        # # Let F_ij=0 if F_ij*(u_j-u_i) > 0
         # result = np.empty(len(fVals))
+
         # n = len(I)
         # for i in range(n-1):
         #     k0, k1 = I[row], I[row+1] # Pointers to begin and end of current row

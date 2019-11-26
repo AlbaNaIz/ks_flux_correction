@@ -2,7 +2,7 @@ from fenics import *
 import numpy as np
 import matplotlib.pyplot as plt
 
-# FEniCS: only warnings (default: 20, information of general interet)
+# FEniCS: only warnings (default: 20, information of general interest)
 set_log_level(30)
 
 # Import classes stored in respective .py files

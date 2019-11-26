@@ -1,7 +1,7 @@
 import numpy as np
 
 # Try to import numba (high performance python compiler!!). If numba is not
-# found, define empty wrappers for functions njit and prange
+# found, define empty wrappers for functions 'njit' and 'prange'
 import importlib
 try:
     numba_loader = importlib.import_module("numba")
@@ -43,18 +43,40 @@ def index(array, item):
             break
     return idx[0]
 
-# @njit(parallel=True)
-@njit
+
+@njit(parallel=True)
 def compute_D_values(I, C, kVals, dVals):
     # 1. To parallize: initialize an output with the desired length
-    out = np.empty(len(kVals))
+    result = np.empty(len(kVals))
     # 2. Use prange (and avoid "race conditions"!)
-    for row in prange(len(I)-1):
-        k0, k1 = I[row], I[row+1] # Pointers to begin and end of current row
-        k_diag = k0 + index( C[k0:k1], row )
-        # # Compute max(-k_{ij}, -k_{ji}, 0 )
-        out[k0:k1] = np.maximum( np.zeros(k1-k0),
+    nrows = len(I)-1
+    for row in prange(nrows):
+        # a) Get pointers to begin and end of current row
+        k0, k1 = I[row], I[row+1]
+
+        # b) Compute values for current row: max(-k_{ij}, -k_{ji}, 0 )
+        result[k0:k1] = np.maximum( np.zeros(k1-k0),
                                  np.maximum(-kVals[k0:k1], -dVals[k0:k1]) )
-        row_sum = np.sum(out[k0:k1]) - out[k_diag]
-        out[k_diag] = -row_sum
-    return out
+
+        # b) Update diagonal value
+        k_diag = k0 + index( C[k0:k1], row )
+        result[k_diag] = 0
+        row_sum = np.sum(result[k0:k1])
+        result[k_diag] = -row_sum
+    return result
+
+@njit(parallel=True)
+def update_F_values(I, C, F_vals, U):
+    """Let F_ij=0 if F_ij*(u_j-u_i) > 0"""
+    n = len(F_vals)
+    result = np.empty(n)
+    for irow in prange(n-1):
+        # a) Get pointers to begin and end of current row
+        k0, k1 = I[irow], I[irow+1]
+
+        # b) Compute U[j] - U[i] for all columns j in current row
+        jcolumns = C[k0:k1]
+        U_ji = U[jcolumns] - U[irow]
+        result[k0:k1] = np.where( np.sign(F_vals[k0:k1]) == np.sign(U_ji),
+                                  0, f_Vals[k0:k1])
+    return result

@@ -6,9 +6,11 @@
 # RHS vectors are buit and then they are modified, following usual
 # steps in FC theory.
 #
-# In this test, we compute only the **low order solution**.
+# In this test, we compute:
+#   * The low order solution.
+#   * The fluxes
 #
-# In this test, we build a coarse mesh, in order to make possible
+# We build a coarse mesh, in order to make possible
 # the inspection of the intermediate matrices.
 #
 
@@ -38,7 +40,6 @@ if( __name__ == "__main__" ):
     # Run time iterations
     #
     ks_test.set_parameter("save_matrices")
-    ks_test.set_parameter("only_low_order_solution")
     result = ks_test.run( nt_steps=1,
                           break_when_negative_u=True, plot_u=False )
 
