@@ -1,7 +1,9 @@
 import numpy as np
 
-# Try to import numba (high performance python compiler!!). If numba is not
-# found, define empty wrappers for functions 'njit' and 'prange'
+# Import numba (high performance python compiler!!).
+#
+# If not found, define empty wrappers for functions 'njit' and 'prange'
+
 import importlib
 try:
     numba_loader = importlib.import_module("numba")
@@ -50,33 +52,44 @@ def compute_D_values(I, C, kVals, dVals):
     result = np.empty(len(kVals))
     # 2. Use prange (and avoid "race conditions"!)
     nrows = len(I)-1
-    for row in prange(nrows):
+    for i in prange(nrows):
         # a) Get pointers to begin and end of current row
-        k0, k1 = I[row], I[row+1]
+        i0, i1 = I[i], I[i+1]
 
-        # b) Compute values for current row: max(-k_{ij}, -k_{ji}, 0 )
-        result[k0:k1] = np.maximum( np.zeros(k1-k0),
-                                 np.maximum(-kVals[k0:k1], -dVals[k0:k1]) )
+        # b) Compute valuos for current row: max(-k_{ij}, -k_{ji}, 0 )
+        result[i0:i1] = np.maximum( np.zeros(i1-i0),
+                                 np.maximum(-kVals[i0:i1], -dVals[i0:i1]) )
 
         # b) Update diagonal value
-        k_diag = k0 + index( C[k0:k1], row )
+        k_diag = i0 + index( C[i0:i1], i )
         result[k_diag] = 0
-        row_sum = np.sum(result[k0:k1])
+        row_sum = np.sum(result[i0:i1])
         result[k_diag] = -row_sum
     return result
 
-@njit(parallel=True)
+
+# @njit(parallel=True)
 def update_F_values(I, C, F_vals, U):
     """Let F_ij=0 if F_ij*(u_j-u_i) > 0"""
-    n = len(F_vals)
-    result = np.empty(n)
-    for irow in prange(n-1):
-        # a) Get pointers to begin and end of current row
-        k0, k1 = I[irow], I[irow+1]
 
-        # b) Compute U[j] - U[i] for all columns j in current row
-        jcolumns = C[k0:k1]
-        U_ji = U[jcolumns] - U[irow]
-        result[k0:k1] = np.where( np.sign(F_vals[k0:k1]) == np.sign(U_ji),
-                                  0, f_Vals[k0:k1])
+    # We will return an array with the same size than F_vals
+    tmp = np.empty(2)
+    result = np.empty( len(F_vals) )
+
+    # Access to rows and modify respective elements<
+    nrows = len(I)-1
+    for i in prange(nrows):
+        # a) Get pointers to begin and end of nz elements in row i
+        i0, i1 = I[i], I[i+1]
+
+        # b) Compute u[j] - u[i] for all columns j in row i
+        jColumns = C[i0:i1]
+        U_ji = U[jColumns] - U[i]
+
+        # c) Let F values = 0 if sign(F)==sign(u[j]-u[i])
+        result[i0:i1] = np.where(
+            np.sign( F_vals[i0:i1] ) == np.sign( U_ji ),
+            0,
+            F_vals[i0:i1]
+        )
     return result

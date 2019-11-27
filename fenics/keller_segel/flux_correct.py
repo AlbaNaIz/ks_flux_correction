@@ -203,41 +203,34 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
 
         # ····· Update residuals: F_ij=0 if F_ij*(u_j-u_i) > 0
 
-        # Build object to access the FEniCS matrix as K a CSR matrix
+        # Object to access the FEniCS matrix F a CSR matrix
         F_CSR = CSR_Matrix(self.F)
-        # Get arrays defining the storage of K in CSR sparse matrix format,
-        I, C, F_vals = K_CSR.get_values_CSR()
+        # Get arrays defining the storage of F in CSR sparse matrix format,
+        I, C, F_vals = F_CSR.get_values_CSR()
         # Update F_vals array with values F_ij=0 if F_ij*(u_j-u_i) > 0
-        F_vals = update_F_values(I, C, F_vals, U)
+        u_numpy = self.u.vector().vec().getArray() # Access to PETSc vector data via numpy
+        F_vals = update_F_values(I, C, F_vals, u_numpy)
         # Create the new matrix F, storing the computed array F_vals
         F_CSR.set_values(F_vals)
         # IS NECCESARY NEXT LINE?
         # self.F =  F_CSR.to_FEniCS_matrix()
 
-        # result = np.empty(len(fVals))
-
-        # n = len(I)
-        # for i in range(n-1):
-        #     k0, k1 = I[row], I[row+1] # Pointers to begin and end of current row
-        #     u_ij = u[C[k0:k1]] - u[row]
-        #     result[k0:k1] = np.where(np.sign(u_ij)==np.sign(fVals[k0:k1]),
-        #                          0, fVals[k0:k1])
-
-        # # copy values into matrix D
-        # fMat.setValuesCSR(I, C, fVals)
-        # fMat.assemble()
-        # self.FF = PETScMatrix(fMat)
-
-        # t0 = time()
-        # self.FF = update_F_values(self.FF, self.u.vector())
-        # print("  ...time (update_F_values):", time()-t0)
-
-        # if self.check_parameter("save_matrices"):
-        #     save_coo_matrix(self.FF, "FF.matrix.coo")
+        if self.check_parameter("save_matrices"):
+            save_coo_matrix(self.F, "FF.matrix.coo")
 
         #
         # 3.2.  Compute the +,- sums of antidifusive fluxes to node i
         #
-        # n = len(u)
-        # for i in range(n-1):
-        #     k0, k1 = I[row], I[row+1] # Pointers to begin and end of current row
+        n = len(u_numpy)
+        Pplus = np.empty(n);  Pminus = np.empty(n)
+        for i in range(n):
+            # a) Get pointers to begin and end of nz elements in row i
+            i0, i1 = I[i], I[i+1]
+            i_diag = i0 + index( C[i0:i1], i )  # Pointer to diagonal elment
+
+            # Under- and super-diagonal values
+            F0, F1 = = F_vals[i0:i_diag], F_vals[i_diag+1:i1]
+            z0, z1 = np.zeros_like(F0), np.zeros_like(F1)
+
+            Pplus[i]  = np.sum( ( np.maximum(F0,z0)), np.maximum(F1,z1) )
+            Pminus[i] = np.sum( ( np.minimum(F0,z0)), np.minimum(F1,z1) )
