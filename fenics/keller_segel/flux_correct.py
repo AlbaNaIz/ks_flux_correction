@@ -234,3 +234,39 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
 
             Pplus[i]  = np.sum( ( np.maximum(F0,z0)), np.maximum(F1,z1) )
             Pminus[i] = np.sum( ( np.minimum(F0,z0)), np.minimum(F1,z1) )
+        
+        Qplus = np.empty(n);  Qminus = np.empty(n)
+        U_ji = np.empty(n);
+        
+        for i in range(n):
+            # a) Get pointers to begin and end of nz elements in row i
+            i0, i1 = I[i], I[i+1]
+            i_diag = i0 + index( C[i0:i1], i )  # Pointer to diagonal elment
+
+            # b) Compute u[j] - u[i] for all columns j in row i
+            jColumns = C[i0:i1]
+            U_ji[i] = U[jColumns] - U[i]
+            
+            Qplus[i]  = np.maximum( ( np.maximum(U_ji), 0 )
+            Qminus[i] = np.minimum( ( np.minimum(U_ji), 0 )
+
+        Rplus = np.empty(n);  Rminus = np.empty(n)
+        # Object to access the FEniCS matrix ML a CSR matrix
+        ML_CSR = CSR_Matrix(self.ML)
+        # Get arrays defining the storage of ML in CSR sparse matrix format,
+        _, _, ML_vals = ML_CSR.get_values_CSR()
+        for i in range(n):
+            Rplus[i] = np.minimum(1,Qplus[i]*ML_vals[i]/(dt*Pplus[i]))
+            Rminus[i] = np.minimum(1,Qminus[i]*ML_vals[i]/(dt*Pminus[i]))
+            
+        self.alpha = assemble(mass_form)
+        # Object to access the FEniCS matrix ML a CSR matrix
+        alpha_CSR = CSR_Matrix(self.alpha)
+        # Get arrays defining the storage of ML in CSR sparse matrix format,
+        I, C, alpha_vals = alpha_CSR.get_values_CSR()
+        for i in range(n):
+            alpha_vals[i] = np.where(
+            F_vals[i]>0,
+            alpha_vals[i] = np.minimum(Rplus[i],Rminus[n-i]),
+            alpha_vals[j] = np.minimum(Rminus[i],Rplus[n-i])
+            )
