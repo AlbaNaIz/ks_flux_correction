@@ -229,14 +229,15 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
             i_diag = i0 + index( C[i0:i1], i )  # Pointer to diagonal elment
 
             # Under- and super-diagonal values
-            F0, F1 = = F_vals[i0:i_diag], F_vals[i_diag+1:i1]
-            z0, z1 = np.zeros_like(F0), np.zeros_like(F1)
-
-            Pplus[i]  = np.sum( ( np.maximum(F0,z0)), np.maximum(F1,z1) )
-            Pminus[i] = np.sum( ( np.minimum(F0,z0)), np.minimum(F1,z1) )
-        
+            F0, F1 = F_vals[i0:i_diag], F_vals[i_diag+1:i1]
+            #z0, z1 = np.zeros_like(F0), np.zeros_like(F1)
+            # It may not work
+            np.maximum(F0,0)
+            Pplus[i]  = np.sum( np.maximum(F0,0) ) + np.sum( np.maximum(F1,0) ) 
+            Pminus[i] = np.sum( np.minimum(F0,0) ) + np.sum( np.minimum(F1,0) ) 
+            
         Qplus = np.empty(n);  Qminus = np.empty(n)
-        U_ji = np.empty(n);
+      
         
         for i in range(n):
             # a) Get pointers to begin and end of nz elements in row i
@@ -245,10 +246,10 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
 
             # b) Compute u[j] - u[i] for all columns j in row i
             jColumns = C[i0:i1]
-            U_ji[i] = U[jColumns] - U[i]
+            U_ji = U[jColumns] - U[i]
             
-            Qplus[i]  = np.maximum( ( np.maximum(U_ji), 0 )
-            Qminus[i] = np.minimum( ( np.minimum(U_ji), 0 )
+            Qplus[i]  = np.maximum( np.max(U_ji), 0 )
+            Qminus[i] = np.minimum( np.min(U_ji), 0 )
 
         Rplus = np.empty(n);  Rminus = np.empty(n)
         # Object to access the FEniCS matrix ML a CSR matrix
@@ -259,14 +260,27 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
             Rplus[i] = np.minimum(1,Qplus[i]*ML_vals[i]/(dt*Pplus[i]))
             Rminus[i] = np.minimum(1,Qminus[i]*ML_vals[i]/(dt*Pminus[i]))
             
-        self.alpha = assemble(mass_form)
+        self.alpha = assemble(self.F)
         # Object to access the FEniCS matrix ML a CSR matrix
         alpha_CSR = CSR_Matrix(self.alpha)
         # Get arrays defining the storage of ML in CSR sparse matrix format,
         I, C, alpha_vals = alpha_CSR.get_values_CSR()
         for i in range(n):
-            alpha_vals[i] = np.where(
-            F_vals[i]>0,
-            alpha_vals[i] = np.minimum(Rplus[i],Rminus[n-i]),
-            alpha_vals[j] = np.minimum(Rminus[i],Rplus[n-i])
-            )
+            i0, i1 = I[i], I[i+1]
+            jColumns = C[i0:i1]
+            alpha_vals[i0:i1] = np.where(
+                F_vals[i0:i1]>0,
+                np.minimum(Rplus[i],Rminus[jColumns]),
+                np.minimum(Rminus[i],Rplus[jColumns])
+                )
+        barf = np.empty(n) 
+        for i in range(n):
+            i0, i1 = I[i], I[i+1]
+            i_diag = i0 + index( C[i0:i1], i )  # Pointer to diagonal elment
+            # Under- and super-diagonal values
+            F0, F1 = F_vals[i0:i_diag], F_vals[i_diag+1:i1]
+            alpha0, alpha1 = alpha_vals[i0:i_diag], alpha_vals[i_diag+1:i1]
+            barf[i] = np.sum( F0*alpha0 ) + np.sum( F1*alpha1 )
+        A = self.ML - dt*self.KL
+        b = self.ML * self.u0.vector() + barf
+        solve (A, self.u.vector(), b)  # Solve A*u = b
