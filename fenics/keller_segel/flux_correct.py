@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 from fenics import *
 import numpy as np
 import matplotlib.pyplot as plt
@@ -177,11 +176,11 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         #
         # 2.4 Compute low order solution
         #
+        U = self.u.vector()
         A = self.ML - dt*self.KL
         b = self.ML * self.u0.vector()
-        U = self.u.vector()
         solve (A, U, b)  # Solve A*u = b
-
+        
         if self.check_parameter("save_matrices"):
             save_coo_matrix(self.K, "K.matrix.coo")
             save_coo_matrix(self.D, "D.matrix.coo")
@@ -235,13 +234,12 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
             F0, F1 = F_vals[i0:i_diag], F_vals[i_diag+1:i1]
             #z0, z1 = np.zeros_like(F0), np.zeros_like(F1)
             # It may not work
-            np.maximum(F0,0)
-            Pplus[i]  = np.sum( np.maximum(F0,0) ) + np.sum( np.maximum(F1,0) )
-            Pminus[i] = np.sum( np.minimum(F0,0) ) + np.sum( np.minimum(F1,0) )
-
+            Pplus[i]  = np.sum( np.maximum(F0,0) ) + np.sum( np.maximum(F1,0) ) 
+            Pminus[i] = np.sum( np.minimum(F0,0) ) + np.sum( np.minimum(F1,0) ) 
+            
         Qplus = np.empty(n);  Qminus = np.empty(n)
-
-
+      
+        
         for i in range(n):
             # a) Get pointers to begin and end of nz elements in row i
             i0, i1 = I[i], I[i+1]
@@ -250,7 +248,7 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
             # b) Compute u[j] - u[i] for all columns j in row i
             jColumns = C[i0:i1]
             U_ji = U[jColumns] - U[i]
-
+            
             Qplus[i]  = np.maximum( np.max(U_ji), 0 )
             Qminus[i] = np.minimum( np.min(U_ji), 0 )
 
@@ -259,13 +257,20 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         ML_CSR = CSR_Matrix(self.ML)
         # Get arrays defining the storage of ML in CSR sparse matrix format,
         _, _, ML_vals = ML_CSR.get_values_CSR()
+        tol = 1.e-20
         for i in range(n):
-            Rplus[i] = np.minimum(1,Qplus[i]*ML_vals[i]/(dt*Pplus[i]))
-            Rminus[i] = np.minimum(1,Qminus[i]*ML_vals[i]/(dt*Pminus[i]))
-
-        self.alpha = assemble(self.F)
+            if Pplus[i] < tol:
+                Rplus[i] = 0
+            else:
+                Rplus[i] = np.minimum(1,Qplus[i]*ML_vals[i]/(dt*Pplus[i]))
+            if Pminus[i] < tol:
+                Rminus[i] = 0
+            else:
+                Rminus[i] = np.minimum(1,Qminus[i]*ML_vals[i]/(dt*Pminus[i]))
+            
+ 
         # Object to access the FEniCS matrix ML a CSR matrix
-        alpha_CSR = CSR_Matrix(self.alpha)
+        alpha_CSR = F_CSR.duplicate()
         # Get arrays defining the storage of ML in CSR sparse matrix format,
         I, C, alpha_vals = alpha_CSR.get_values_CSR()
         for i in range(n):
@@ -276,7 +281,7 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
                 np.minimum(Rplus[i],Rminus[jColumns]),
                 np.minimum(Rminus[i],Rplus[jColumns])
                 )
-        barf = np.empty(n)
+        barf = np.empty(n) 
         for i in range(n):
             i0, i1 = I[i], I[i+1]
             i_diag = i0 + index( C[i0:i1], i )  # Pointer to diagonal elment
