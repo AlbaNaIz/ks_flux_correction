@@ -180,7 +180,7 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         A = self.ML - dt*self.KL
         b = self.ML * self.u0.vector()
         solve (A, U, b)  # Solve A*u = b
-        
+
         if self.check_parameter("save_matrices"):
             save_coo_matrix(self.K, "K.matrix.coo")
             save_coo_matrix(self.D, "D.matrix.coo")
@@ -234,12 +234,12 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
             F0, F1 = F_vals[i0:i_diag], F_vals[i_diag+1:i1]
             #z0, z1 = np.zeros_like(F0), np.zeros_like(F1)
             # It may not work
-            Pplus[i]  = np.sum( np.maximum(F0,0) ) + np.sum( np.maximum(F1,0) ) 
-            Pminus[i] = np.sum( np.minimum(F0,0) ) + np.sum( np.minimum(F1,0) ) 
-            
+            Pplus[i]  = np.sum( np.maximum(F0,0) ) + np.sum( np.maximum(F1,0) )
+            Pminus[i] = np.sum( np.minimum(F0,0) ) + np.sum( np.minimum(F1,0) )
+
         Qplus = np.empty(n);  Qminus = np.empty(n)
-      
-        
+
+
         for i in range(n):
             # a) Get pointers to begin and end of nz elements in row i
             i0, i1 = I[i], I[i+1]
@@ -248,7 +248,7 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
             # b) Compute u[j] - u[i] for all columns j in row i
             jColumns = C[i0:i1]
             U_ji = U[jColumns] - U[i]
-            
+
             Qplus[i]  = np.maximum( np.max(U_ji), 0 )
             Qminus[i] = np.minimum( np.min(U_ji), 0 )
 
@@ -267,8 +267,8 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
                 Rminus[i] = 0
             else:
                 Rminus[i] = np.minimum(1,Qminus[i]*ML_vals[i]/(dt*Pminus[i]))
-            
- 
+
+
         # Object to access the FEniCS matrix ML a CSR matrix
         alpha_CSR = F_CSR.duplicate()
         # Get arrays defining the storage of ML in CSR sparse matrix format,
@@ -281,7 +281,16 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
                 np.minimum(Rplus[i],Rminus[jColumns]),
                 np.minimum(Rminus[i],Rplus[jColumns])
                 )
-        barf = np.empty(n) 
+        alpha_CSR.set_values(alpha_vals)
+        self.alpha =  alpha_CSR.to_FEniCS_matrix()
+
+        if self.check_parameter("save_matrices"):
+            print("Saving alpha")
+            save_coo_matrix(self.alpha, "alpha.matrix.coo")
+
+        # barf = np.empty
+        barFunction = Function(self.Vh);
+        barf = barFunction.vector()
         for i in range(n):
             i0, i1 = I[i], I[i+1]
             i_diag = i0 + index( C[i0:i1], i )  # Pointer to diagonal elment
@@ -290,5 +299,7 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
             alpha0, alpha1 = alpha_vals[i0:i_diag], alpha_vals[i_diag+1:i1]
             barf[i] = np.sum( F0*alpha0 ) + np.sum( F1*alpha1 )
         A = self.ML - dt*self.KL
-        b = self.ML * self.u0.vector() + barf
+        b = self.ML * self.u0.vector() - barf
+        print("Solving high order scheme")
+        print("barf=", barf.vec().getArray())
         solve (A, self.u.vector(), b)  # Solve A*u = b

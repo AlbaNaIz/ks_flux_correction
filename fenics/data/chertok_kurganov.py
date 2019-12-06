@@ -15,9 +15,10 @@ def build_mesh():
                          nx=nx, ny=nx)
     return mesh
 
-def reset(_nx=nx, _fe_order=fe_order):
+def reset(_nx=nx, _dt=dt, _fe_order=fe_order):
     global nx, mesh, u_init, v_init
     nx = _nx
+    dt = _dt
     mesh = build_mesh()
 
     u_init = Expression("1000*exp(-100*(x[0]*x[0]+x[1]*x[1]))",
