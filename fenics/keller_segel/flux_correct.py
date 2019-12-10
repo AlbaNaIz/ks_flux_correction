@@ -100,7 +100,8 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
 
         # Mass lumping matrix
         mass_action_form = action(mass_form, Constant(1))
-        self.ML = assemble(mass_form)
+        self.ML = assemble(mass_form) # !!!!
+        print("type ML:", type(self.ML))
         self.ML.zero()
         self.ML.set_diagonal(assemble(mass_action_form))
 
@@ -268,6 +269,11 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
             else:
                 Rminus[i] = np.minimum(1,Qminus[i]*ML_vals[i]/(dt*Pminus[i]))
 
+        print("#### Pplus:", Pplus);
+        print("#### Pminus:", Pminus);
+        print("#### ML_vals:", ML_vals);
+        print("#### Rplus:", Rplus);
+        print("#### Rminus:", Rminus);
 
         # Object to access the FEniCS matrix ML a CSR matrix
         alpha_CSR = F_CSR.duplicate()
@@ -287,6 +293,9 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         if self.check_parameter("save_matrices"):
             print("Saving alpha")
             save_coo_matrix(self.alpha, "alpha.matrix.coo")
+
+        #########################
+        #########################
 
         # barf = np.empty
         barFunction = Function(self.Vh);
