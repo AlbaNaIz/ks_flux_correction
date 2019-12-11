@@ -21,7 +21,6 @@ from keller_segel.numba_optimized import (
 class CSR_Matrix(object):
     """Container for a sparse matrix whose data is accesed using CSR
     storage format
-
     Current implementation assumes that the PETSC backend is being used
     by FEniCS."""
     def __init__(self, FEniCS_matrix=None):
@@ -101,10 +100,10 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         # Mass lumping matrix
         mass_action_form = action(mass_form, Constant(1))
         self.ML = assemble(mass_form) # !!!!
-        print("type ML:", type(self.ML))
+        #print("type ML:", type(self.ML))
         self.ML.zero()
         self.ML.set_diagonal(assemble(mass_action_form))
-
+        #print("type Mass action form:", type(mass_action_form))
         # Diffusion matrix
         self.L = assemble( dot(grad(u), grad(ub))*dx )
 
@@ -237,7 +236,7 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
             # It may not work
             Pplus[i]  = np.sum( np.maximum(F0,0) ) + np.sum( np.maximum(F1,0) )
             Pminus[i] = np.sum( np.minimum(F0,0) ) + np.sum( np.minimum(F1,0) )
-
+            
         Qplus = np.empty(n);  Qminus = np.empty(n)
 
 
@@ -258,16 +257,24 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         ML_CSR = CSR_Matrix(self.ML)
         # Get arrays defining the storage of ML in CSR sparse matrix format,
         _, _, ML_vals = ML_CSR.get_values_CSR()
+        j = 0
+        N = len(ML_vals)
+        ML_diagonal = np.zeros(n)
+        for i in range(N):
+            if ML_vals[i]!=0:
+                ML_diagonal[j]=ML_vals[i]
+                j=j+1
+        print("ML_diagonal:", ML_diagonal)
         tol = 1.e-20
         for i in range(n):
             if Pplus[i] < tol:
-                Rplus[i] = 0
+                Rplus[i] = 1
             else:
-                Rplus[i] = np.minimum(1,Qplus[i]*ML_vals[i]/(dt*Pplus[i]))
+                Rplus[i] = np.minimum(1,Qplus[i]*ML_diagonal[i]/(dt*Pplus[i]))
             if Pminus[i] < tol:
-                Rminus[i] = 0
+                Rminus[i] = 1
             else:
-                Rminus[i] = np.minimum(1,Qminus[i]*ML_vals[i]/(dt*Pminus[i]))
+                Rminus[i] = np.minimum(1,Qminus[i]*ML_diagonal[i]/(dt*Pminus[i]))
 
         print("#### Pplus:", Pplus);
         print("#### Pminus:", Pminus);
@@ -289,7 +296,6 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
                 )
         alpha_CSR.set_values(alpha_vals)
         self.alpha =  alpha_CSR.to_FEniCS_matrix()
-
         if self.check_parameter("save_matrices"):
             print("Saving alpha")
             save_coo_matrix(self.alpha, "alpha.matrix.coo")
