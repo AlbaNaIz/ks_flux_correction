@@ -268,11 +268,11 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         tol = 1.e-20
         for i in range(n):
             if Pplus[i] < tol:
-                Rplus[i] = 1
+                Rplus[i] = 0
             else:
                 Rplus[i] = np.minimum(1,Qplus[i]*ML_diagonal[i]/(dt*Pplus[i]))
             if Pminus[i] < tol:
-                Rminus[i] = 1
+                Rminus[i] = 0
             else:
                 Rminus[i] = np.minimum(1,Qminus[i]*ML_diagonal[i]/(dt*Pminus[i]))
 
