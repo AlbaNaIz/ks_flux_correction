@@ -34,11 +34,11 @@ class CSR_Matrix(object):
         self.underlying_PETSc_matrix = PETSc_matrix
         self.I, self.C, self.V = self.underlying_PETSc_matrix.getValuesCSR()
         self.size = self.underlying_PETSc_matrix.size
-        self.nrows = self.size[0]
-        self.ncols = self.size[1]
+        self._nrows = self.size[0]
+        self._ncols = self.size[1]
 
     def nrows(self):
-        return len(I)-1
+        return self._nrows #len(I)-1
 
     def duplicate(self):
         "Returns a new CSR_Matrix which is a copy of this"
@@ -208,7 +208,7 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         # 3.1 Compute raw flux: f_ij = (m_ij*d/dt + d_ij)*(u_j-u_i)
         #
         M_CSR = CSR_Matrix(self.M)
-        M_CSR.assert_sparsity_pattern(self.D) # Imlicitly assumed below
+        M_CSR.assert_sparsity_pattern(D_CSR) # Imlicitly assumed below
         F_CSR = M_CSR.duplicate()
 
         # Get arrays defining the storage of M & F in CSR sparse matrix format
@@ -259,24 +259,21 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
             i0, i1 = I[i], I[i+1]
             i_diag = i0 + index( C[i0:i1], i )  # Pointer to diagonal elment
 
-            # Under- and super-diagonal values
             F0, F1 = F_vals[i0:i_diag], F_vals[i_diag+1:i1]
-            #z0, z1 = np.zeros_like(F0), np.zeros_like(F1)
-            # It may not work
             Pplus[i]  = np.sum( np.maximum(F0,0) ) + np.sum( np.maximum(F1,0) )
             Pminus[i] = np.sum( np.minimum(F0,0) ) + np.sum( np.minimum(F1,0) )
 
         Qplus = np.empty(n);  Qminus = np.empty(n)
-
-
         for i in range(n):
             # a) Get pointers to begin and end of nz elements in row i
             i0, i1 = I[i], I[i+1]
             i_diag = i0 + index( C[i0:i1], i )  # Pointer to diagonal elment
+            j_cols =  C[i0:i1] # Nz columns in row i
+            j_cols_non_i = j_cols[ j_cols !=i ]
+            print("i =", i, ":", j_cols_non_i)
 
             # b) Compute u[j] - u[i] for all columns j in row i
-            jColumns = C[i0:i1]
-            U_ji = U[jColumns] - U[i]
+            U_ji = u_numpy[j_cols_non_i] - u_numpy[i]
 
             Qplus[i]  = np.maximum( np.max(U_ji), 0 )
             Qminus[i] = np.minimum( np.min(U_ji), 0 )
@@ -296,20 +293,22 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         print("ML_diagonal:", ML_diagonal)
         tol = 1.e-20
         for i in range(n):
-            if Pplus[i] < tol:
+            if abs(Pplus[i]) < tol:
                 Rplus[i] = 0
             else:
-                Rplus[i] = np.minimum(1,Qplus[i]*ML_diagonal[i]/(dt*Pplus[i]))
-            if Pminus[i] < tol:
+                Rplus[i] = np.minimum(1, Qplus[i]*ML_diagonal[i]/(dt*Pplus[i]))
+            if abs(Pminus[i]) < tol:
                 Rminus[i] = 0
             else:
-                Rminus[i] = np.minimum(1,Qminus[i]*ML_diagonal[i]/(dt*Pminus[i]))
+                Rminus[i] = np.minimum(1, Qminus[i]*ML_diagonal[i]/(dt*Pminus[i]))
 
-        print("#### Pplus:", Pplus);
-        print("#### Pminus:", Pminus);
-        print("#### ML_vals:", ML_vals);
-        print("#### Rplus:", Rplus);
-        print("#### Rminus:", Rminus);
+        print("#Pplus:", Pplus);
+        print("#Pminus:", Pminus);
+        print("#Qplus:", Pplus);
+        print("#Qminus:", Pminus);
+        print("#ML_vals:", ML_vals);
+        print("#Rplus:", Rplus);
+        print("#Rminus:", Rminus);
 
         # Object to access the FEniCS matrix ML a CSR matrix
         alpha_CSR = F_CSR.duplicate()
