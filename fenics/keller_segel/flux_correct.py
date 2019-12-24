@@ -1,6 +1,9 @@
+# -*- coding: utf-8 -*-
 from fenics import *
 import numpy as np
 import matplotlib.pyplot as plt
+
+from scipy.sparse import csr_matrix, coo_matrix
 
 from keller_segel.matrix_default_scheme import (
     KS_Matrix_DefaultScheme, save_coo_matrix )
@@ -20,7 +23,6 @@ from keller_segel.numba_optimized import (
 class CSR_Matrix(object):
     """Container for a sparse matrix whose data is accesed using CSR
     storage format
-
     Current implementation assumes that the PETSC backend is being used
     by FEniCS."""
     def __init__(self, FEniCS_matrix=None):
@@ -99,10 +101,11 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
 
         # Mass lumping matrix
         mass_action_form = action(mass_form, Constant(1))
-        self.ML = assemble(mass_form)
+        self.ML = assemble(mass_form) # !!!!
+        #print("type ML:", type(self.ML))
         self.ML.zero()
         self.ML.set_diagonal(assemble(mass_action_form))
-
+        #print("type Mass action form:", type(mass_action_form))
         # Diffusion matrix
         self.L = assemble( dot(grad(u), grad(ub))*dx )
 
@@ -175,10 +178,15 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         #
         # 2.4 Compute low order solution
         #
+        U = self.u.vector()
         A = self.ML - dt*self.KL
         b = self.ML * self.u0.vector()
-        solve (A, self.u.vector(), b)  # Solve A*u = b
-
+        solve (A, U, b)  # Solve A*u = b
+        
+        print("Low order solution:")
+        print("max(u)=" , max(U.vec().getArray()))
+        print("min(u)=" , min(U.vec().getArray()))
+        
         if self.check_parameter("save_matrices"):
             save_coo_matrix(self.K, "K.matrix.coo")
             save_coo_matrix(self.D, "D.matrix.coo")
@@ -188,49 +196,228 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         if self.check_parameter("only_low_order_solution"):
             print("Computed the low order solution (only!!)")
             return()
-
+            
         ##,-------------------------------------------------------------
         ##| 3. Update u system to high order solution
-        ##`-------------------------------------------------------------
-
+        ##`------------------------------------------------------------
+        
         #
-        # 3.1 Compute residuals, f_ij = (m_ij + d_ij)*(u_j-u_i)
+        # 3.1 Getting M and D matrix as coo type
         #
-        self.F = self.M - self.ML - dt*self.D
+        
+        print("Getting M and D matrix as coo type")
+        
+        Aux = as_backend_type(self.M).mat()
+        coo_M = coo_matrix(csr_matrix(Aux.getValuesCSR()[::-1]))
+        
+        nM = coo_M.row[-1] + 1
+        
+        Aux = as_backend_type(self.D).mat()
+        coo_D = coo_matrix(csr_matrix(Aux.getValuesCSR()[::-1]))
+        
+        nD = coo_D.row[-1] + 1
+        
+        #
+        # 3.2 Generating M and D matrices synchronizing indices to optimize the algorithm
+        #
+        
+        print("Generating M and D matrices synchronizing indices to optimize the algorithm")
+        
+  
+        IJM = list(range(len(coo_M.row)))
 
+        for k in range(len(coo_M.row)):
+            #if coo_M.row[k] < coo_M.col[k]:
+            IJM[k] = (coo_M.row[k],coo_M.col[k])
+        
+        
+        IJD = list(range(len(coo_D.row)))
+        
+        for k in range(len(coo_D.row)):
+            #if coo_M.row[k] < coo_M.col[k]:
+            IJD[k] = (coo_D.row[k],coo_D.col[k])
+        
+        
+        IJF = sorted(list(dict.fromkeys(IJM+IJD)))
+        
+        M_sync = list(range(len(IJF)))
+        D_sync = list(range(len(IJF)))
+        
+        kf = 0
+        km = 0
+        kd = 0
+        
+        for (i,j) in IJF:
+        
+            if (i,j) == (coo_M.row[km],coo_M.col[km]):
+                M_sync[kf] = coo_M.data[km]
+                km = km + 1
+            else:
+                M_sync[kf] = 0
+                
+            if (i,j) == (coo_D.row[kd],coo_D.col[kd]):
+                D_sync[kf] = coo_D.data[kd]
+                kd = kd + 1
+            else:
+                D_sync[kf] = 0
+                
+            kf = kf + 1
+          
+        #
+        # 3.3 Computing residuals, f_ij = (m_ij + d_ij)*(u_i-u_j)
+        #
+        
+        print("Computing residuals")
+        
+        u_m1 = U.vec().getArray()
+        u_m0 = self.u0.vector().vec().getArray()
+        
+        F_dat = list(range(len(IJF)))
+        F_row = list(range(len(IJF)))
+        F_col = list(range(len(IJF)))
+        
+        r = 0
+        s = 0
+        
+        for (i,j) in IJF:
+            
+            mij = M_sync[r]
+            dij = D_sync[r]
+            
+            fij = mij/dt * ((u_m1[i]-u_m1[j]) - (u_m0[i]-u_m0[j])) + dij * (u_m1[i]-u_m1[j])
+            
+            if fij * (u_m1[j] - u_m1[i]) <= 0 and fij != 0:
+                
+                F_dat[s] = fij
+                F_row[s] = i
+                F_col[s] = j
+                
+                s = s + 1
+            
+            r = r + 1
+        
+        # Get just the s first values saved
+        F_dat = F_dat[:s]
+        F_row = F_row[:s]
+        F_col = F_col[:s]
+        
+        # Build coo F matrix
+        coo_F = coo_matrix((F_dat, (F_row, F_col)), shape=(nM,nM))
+        
+        # Save matrices
         if self.check_parameter("save_matrices"):
-            save_coo_matrix(self.F, "FF_previous.matrix.coo")
-
-        # ····· Update residuals: F_ij=0 if F_ij*(u_j-u_i) > 0
-
-        # Object to access the FEniCS matrix F a CSR matrix
-        F_CSR = CSR_Matrix(self.F)
-        # Get arrays defining the storage of F in CSR sparse matrix format,
-        I, C, F_vals = F_CSR.get_values_CSR()
-        # Update F_vals array with values F_ij=0 if F_ij*(u_j-u_i) > 0
-        u_numpy = self.u.vector().vec().getArray() # Access to PETSc vector data via numpy
-        F_vals = update_F_values(I, C, F_vals, u_numpy)
-        # Create the new matrix F, storing the computed array F_vals
-        F_CSR.set_values(F_vals)
-        # IS NECCESARY NEXT LINE?
-        # self.F =  F_CSR.to_FEniCS_matrix()
-
-        if self.check_parameter("save_matrices"):
-            save_coo_matrix(self.F, "FF.matrix.coo")
-
+            np.savetxt("F.matrix.coo",
+            np.c_[coo_F.row, coo_F.col, coo_F.data],
+            fmt=['%d', '%d', '%.16f'])
+        
         #
-        # 3.2.  Compute the +,- sums of antidifusive fluxes to node i
+        # 3.4 Generating ML diagonal vector to optimize the algotithm
         #
-        n = len(u_numpy)
-        Pplus = np.empty(n);  Pminus = np.empty(n)
-        for i in range(n):
-            # a) Get pointers to begin and end of nz elements in row i
-            i0, i1 = I[i], I[i+1]
-            i_diag = i0 + index( C[i0:i1], i )  # Pointer to diagonal elment
-
-            # Under- and super-diagonal values
-            F0, F1 = = F_vals[i0:i_diag], F_vals[i_diag+1:i1]
-            z0, z1 = np.zeros_like(F0), np.zeros_like(F1)
-
-            Pplus[i]  = np.sum( ( np.maximum(F0,z0)), np.maximum(F1,z1) )
-            Pminus[i] = np.sum( ( np.minimum(F0,z0)), np.minimum(F1,z1) )
+        
+        print("Generating ML diagonal vector to optimize the algotithm")
+        
+        # Object to access the FEniCS matrix ML a CSR matrix
+        ML_CSR = CSR_Matrix(self.ML)
+        
+        # Get arrays defining the storage of ML in CSR sparse matrix format,
+        _, _, ML_vals = ML_CSR.get_values_CSR()
+        
+        ML_diag = np.zeros(nM)
+        
+        j = 0
+        for i in range(len(ML_vals)):
+            if ML_vals[i]!=0:
+                ML_diag[j]=ML_vals[i]
+                j=j+1
+        
+        #
+        # 3.5 Computing R+ and R-
+        #
+        
+        print("Computing R+ and R-")
+        
+        Rp = np.empty(nM);  
+        Rm = np.empty(nM)
+        
+        tol = 1.e-20
+        
+        k = 0
+        
+        for i in list(dict.fromkeys(F_row)):
+                
+            Pp = 0
+            Pm = 0
+            
+            while k < len(F_row) and i == F_row[k]:
+                
+                if i != F_col[k]:
+                    Pp = Pp + np.maximum(0,F_dat[k])
+                    Pm = Pm + np.minimum(0,F_dat[k])
+                
+                k = k + 1
+            
+            Qp = np.maximum(np.max(u_m1-u_m1[i]),0)
+            Qm = np.minimum(np.min(u_m1-u_m1[i]),0)
+            
+            if Pp < tol:
+                Rp[i] = 0
+            else: 
+                Rp[i] = np.minimum(1, ML_diag[i]*Qp/(dt*Pp))
+            
+            if -Pm < tol:
+                Rm[i] = 0
+            else:
+                Rm[i] = np.minimum(1, ML_diag[i]*Qm/(dt*Pm))
+        
+        #
+        # 3.6 Compunting alpha
+        #
+        
+        print("Computing alpha")
+        
+        alpha = list(range(len(F_dat)))
+       
+        for k in range(len(F_dat)):
+            
+            i = F_row[k]
+            j = F_col[k]
+            
+            if F_dat[k] > 0: 
+                alpha[k] = np.minimum(Rp[i],Rm[j])
+            else:
+                alpha[k] = np.minimum(Rm[i],Rp[j])
+        
+        #
+        # 3.7 Computing f bar
+        #
+        
+        print("Computing f bar")
+        
+        barFunction = Function(self.Vh);
+        barf = barFunction.vector()
+        
+        k = 0
+        
+        for i in list(dict.fromkeys(F_row)):
+                
+            barf[i] = 0
+            
+            while k < len(F_row) and i == F_row[k]:
+                
+                if i != F_col[k]:
+                    barf[i] = barf[i] + alpha[k]*F_dat[k]
+                
+                k = k + 1
+               
+        print("barf = ", barf.vec().getArray())
+        
+        #
+        # 3.8 Solving high order scheme
+        #
+        
+        print("Solving high order scheme")
+        
+        A = self.ML - dt*self.KL
+        b = self.ML * self.u0.vector() - barf
+        
+        solve (A, self.u.vector(), b)  # Solve A*u = b
