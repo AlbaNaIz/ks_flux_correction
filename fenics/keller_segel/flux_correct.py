@@ -185,6 +185,8 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         #
         # 2.4 Compute low order solution
         #
+        U = self.u.vector()
+        A = self.ML - dt*self.KL
         b = self.ML * self.u0.vector()
         solve (A, U, b)  # Solve A*u = b
 
