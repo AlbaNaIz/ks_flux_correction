@@ -73,7 +73,6 @@ def update_F_values(I, C, F_vals, U):
     """Let F_ij=0 if F_ij*(u_j-u_i) > 0"""
 
     # We will return an array with the same size than F_vals
-    tmp = np.empty(2)
     result = np.empty( len(F_vals) )
 
     # Access to rows and modify respective elements<

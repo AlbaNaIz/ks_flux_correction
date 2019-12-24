@@ -2,6 +2,7 @@
 from fenics import *
 import numpy as np
 import matplotlib.pyplot as plt
+from numpy.testing import assert_equal
 
 from keller_segel.matrix_default_scheme import (
     KS_Matrix_DefaultScheme, save_coo_matrix )
@@ -20,13 +21,13 @@ from keller_segel.numba_optimized import (
 
 class CSR_Matrix(object):
     """Container for a sparse matrix whose data is accesed using CSR
-    storage format
-    Current implementation assumes that the PETSC backend is being used
-    by FEniCS."""
+    storage format Current implementation assumes that the PETSC
+    backend is being used by FEniCS. The CSR_Matrix wraps this PETSC
+    backend.
+    """
     def __init__(self, FEniCS_matrix=None):
-        self.FEniCS_matrix = FEniCS_matrix
         if FEniCS_matrix != None:
-           underlying_PETSc_matrix = as_backend_type(self.FEniCS_matrix).mat()
+           underlying_PETSc_matrix = as_backend_type(FEniCS_matrix).mat()
            self.update_internal_data(underlying_PETSc_matrix)
 
     def update_internal_data(self, PETSc_matrix):
@@ -35,6 +36,9 @@ class CSR_Matrix(object):
         self.size = self.underlying_PETSc_matrix.size
         self.nrows = self.size[0]
         self.ncols = self.size[1]
+
+    def nrows(self):
+        return len(I)-1
 
     def duplicate(self):
         "Returns a new CSR_Matrix which is a copy of this"
@@ -62,6 +66,11 @@ class CSR_Matrix(object):
         self.underlying_PETSc_matrix.transpose(transpose_mat)
         # Assign transpose_mat as underlying PETSc matrix of CSR_mat
         CSR_mat.update_internal_data(transpose_mat)
+
+    def assert_sparsity_pattern(self, other_CSR_mat):
+        """Assert the position of nz elements math position in other matrix"""
+        assert_equal(self.I, other_CSR_mat.I)
+        assert_equal(self.C, other_CSR_mat.C)
 
     def to_FEniCS_matrix(self):
         """Build a FEniCS matrix from current values internal CSR values or
@@ -176,8 +185,6 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         #
         # 2.4 Compute low order solution
         #
-        U = self.u.vector()
-        A = self.ML - dt*self.KL
         b = self.ML * self.u0.vector()
         solve (A, U, b)  # Solve A*u = b
 
@@ -196,23 +203,43 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
         ##`-------------------------------------------------------------
 
         #
-        # 3.1 Compute residuals, f_ij = (m_ij + d_ij)*(u_j-u_i)
+        # 3.1 Compute raw flux: f_ij = (m_ij*d/dt + d_ij)*(u_j-u_i)
         #
-        self.F = self.M - self.ML - dt*self.D
+        M_CSR = CSR_Matrix(self.M)
+        M_CSR.assert_sparsity_pattern(self.D) # Imlicitly assumed below
+        F_CSR = M_CSR.duplicate()
+
+        # Get arrays defining the storage of M & F in CSR sparse matrix format
+        I, C, M_vals = M_CSR.get_values_CSR()
+        _, _, F_vals = F_CSR.get_values_CSR()
+
+        # Access to PETSc vector data via numpy. This allows optimized code
+        u_numpy = self.u.vector().vec().getArray()
+        u0_numpy = self.u0.vector().vec().getArray()
+
+        # Coimpute F values
+        n = M_CSR.nrows()
+        for i in range(n):
+            # a) Get pointers to begin and end of nz elements in row i
+            i0, i1 = I[i], I[i+1]
+            jColumns = C[i0:i1]
+            i_diag = i0 + index( jColumns, i )  # Pointer to diagonal elment
+
+            diff_u_i  = u_numpy[i]  - u_numpy[jColumns]
+            diff_u0_i = u0_numpy[i] - u0_numpy[jColumns]
+            F_vals[i0:i1] = ( M_vals[i0:i1] * (diff_u_i + diff_u0_i) / dt +
+                              D_vals[i0:i1] *  diff_u_i )
+
+            F_vals[i_diag] = 0
+            F_vals[i_diag] = np.sum(F_vals[i0:i1])
+
+        self.F =  F_CSR.to_FEniCS_matrix()
 
         if self.check_parameter("save_matrices"):
             save_coo_matrix(self.F, "FF_previous.matrix.coo")
 
         # ····· Update residuals: F_ij=0 if F_ij*(u_j-u_i) > 0
-
-        # Object to access the FEniCS matrix F a CSR matrix
-        F_CSR = CSR_Matrix(self.F)
-        # Get arrays defining the storage of F in CSR sparse matrix format,
-        I, C, F_vals = F_CSR.get_values_CSR()
-        # Update F_vals array with values F_ij=0 if F_ij*(u_j-u_i) > 0
-        u_numpy = self.u.vector().vec().getArray() # Access to PETSc vector data via numpy
         F_vals = update_F_values(I, C, F_vals, u_numpy)
-        # Create the new matrix F, storing the computed array F_vals
         F_CSR.set_values(F_vals)
         # IS NECCESARY NEXT LINE?
         # self.F =  F_CSR.to_FEniCS_matrix()
@@ -236,7 +263,7 @@ class KS_FluxCorrect_DefaultScheme(KS_Matrix_DefaultScheme):
             # It may not work
             Pplus[i]  = np.sum( np.maximum(F0,0) ) + np.sum( np.maximum(F1,0) )
             Pminus[i] = np.sum( np.minimum(F0,0) ) + np.sum( np.minimum(F1,0) )
-            
+
         Qplus = np.empty(n);  Qminus = np.empty(n)
 
 
