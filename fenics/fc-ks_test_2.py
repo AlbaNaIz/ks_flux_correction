@@ -23,6 +23,7 @@ if( __name__ == "__main__" ):
     # Read all the data from a parameters file
     #
     import data.chertok_kurganov as dat
+    # import data.giuseppe as dat
     # dat.reset(_nx = 3, _dt=1.e-4)
     # plot(dat.mesh)
     # plt.show()
@@ -40,7 +41,7 @@ if( __name__ == "__main__" ):
     # Run time iterations
     #
     ks_test.set_parameter("save_matrices")
-    result = ks_test.run( nt_steps=200,
+    result = ks_test.run( nt_steps=100,
                           break_when_negative_u=True, plot_u=False )
 
     #
